@@ -2,7 +2,8 @@
 
 import numpy as np
 import os, vtk, pdb
-from vtk.util import numpy_support
+from vtk.util.numpy_support import vtk_to_numpy as v2n
+from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 
 def read_geo(fname):
@@ -28,9 +29,9 @@ def write_geo(fname, reader):
 
 
 def transfer_solution(node_surf, node_vol, res_fields):
-    # get unique node ids in both meshes
-    nd_id_surf = numpy_support.vtk_to_numpy(node_surf.GetArray('GlobalNodeID')).astype(int)
-    nd_id_vol = numpy_support.vtk_to_numpy(node_vol.GetArray('GlobalNodeID')).astype(int)
+    # get global node ids in both meshes
+    nd_id_surf = v2n(node_surf.GetArray('GlobalNodeID')).astype(int)
+    nd_id_vol = v2n(node_vol.GetArray('GlobalNodeID')).astype(int)
 
     # map volume mesh to surface mesh
     mask = np.searchsorted(nd_id_vol, nd_id_surf)
@@ -40,10 +41,10 @@ def transfer_solution(node_surf, node_vol, res_fields):
         res_name = node_vol.GetArrayName(i)
         if res_name.split('_')[0] in res_fields:
             # read results from volume mesh
-            res = numpy_support.vtk_to_numpy(node_vol.GetArray(res_name))
+            res = v2n(node_vol.GetArray(res_name))
 
             # create array to output surface mesh results
-            out_array = numpy_support.numpy_to_vtk(res[mask])
+            out_array = n2v(res[mask])
             out_array.SetName(res_name)
             node_surf.AddArray(out_array)
 
@@ -63,35 +64,51 @@ def sort_faces(res_faces):
             name, time = res_name.split('_')
             if name not in res_array:
                 res_array[name] = np.zeros((times.shape[0], max(list(res_faces.keys()))))
-            res_array[name][np.where(float(time) == times), f-1] = res
+            res_array[name][float(time) == times, f - 1] = res
 
     return res_array
 
 
-def integration(int_input, res_fields):
-    integrator = {}
-    for f in res_fields:
+class Integration:
+    def __init__(self, int_input):
         # integrate over selected face
-        integrate = vtk.vtkIntegrateAttributes()
+        self.integrator = vtk.vtkIntegrateAttributes()
+        self.integrator.SetInputData(int_input)
+        self.integrator.Update()
 
-        # choose if integral should be divided by volume (=area in this case)
-        if f == 'velocity':
-            integrate.SetDivideAllCellDataByVolume(0)
-        elif f == 'pressure':
-            integrate.SetDivideAllCellDataByVolume(1)
+    def evaluate(self, field, res_name):
+        int_out = self.integrator.GetOutput()
+
+        # evaluate integral
+        integral = v2n(int_out.GetPointData().GetArray(res_name))
+
+        # evaluate surface area
+        area = v2n(int_out.GetCellData().GetArray('Area'))[0]
+
+        # choose if integral should be divided by area
+        if field == 'velocity':
+            out = integral
+        elif field == 'pressure':
+            out = integral / area
         else:
-            raise ValueError('Unknown integration for field ' + f)
+            raise ValueError('Unknown integration for field ' + field)
 
-        integrate.SetInputData(int_input)
-        integrate.Update()
-        integrator[f] = integrate.GetOutput().GetPointData()
+        return out
 
-    return integrator
+
+def threshold(reader, t):
+    thresh = vtk.vtkThreshold()
+    thresh.SetInputConnection(reader.GetOutputPort())
+    thresh.SetInputArrayToProcess(0, 0, 0, 1, 'BC_FaceID')
+    thresh.ThresholdBetween(t, t)
+    thresh.Update()
+    thresh_node = thresh.GetOutput().GetPointData()
+    return thresh, thresh_node
 
 
 def integrate_surfaces(reader_surf, cell_surf, res_fields):
     # boundary faces
-    faces = np.unique(numpy_support.vtk_to_numpy(cell_surf.GetArray('BC_FaceID')).astype(int))
+    faces = np.unique(v2n(cell_surf.GetArray('BC_FaceID')).astype(int))
     res_faces = {}
 
     # loop boundary faces
@@ -102,15 +119,10 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
             res_faces[f] = {}
 
             # threshhold face
-            thresh = vtk.vtkThreshold()
-            thresh.SetInputConnection(reader_surf.GetOutputPort())
-            thresh.SetInputArrayToProcess(0, 0, 0, 1, 'BC_FaceID')
-            thresh.ThresholdBetween(f, f)
-            thresh.Update()
-            thresh_node = thresh.GetOutput().GetPointData()
+            thresh, thresh_node = threshold(reader_surf, f)
 
             # integrate over selected face (separately for pressure and velocity)
-            integrator = integration(thresh.GetOutput(), res_fields)
+            integrator = Integration(thresh.GetOutput())
 
             # get integral for each result
             for i in range(thresh_node.GetNumberOfArrays()):
@@ -119,18 +131,9 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
 
                 # check if field should be added to output
                 if field in res_fields:
-                    # create new array fo
-                    out = numpy_support.vtk_to_numpy(integrator[field].GetArray(res_name))
-
-                    # export scalar
-                    if len(out.shape) == 1 and out.shape[0] == 1:
-                        res_faces[f][res_name] = out[0]
-
-                    # export vector norm
-                    elif len(out.shape) == 2 and out.shape[1] == 3:
-                        res_faces[f][res_name] = np.linalg.norm(out)
-                    else:
-                        raise ValueError('Unknown shape of array ' + repr(out.shape))
+                    # perform integration
+                    out = integrator.evaluate(field, res_name)
+                    res_faces[f][res_name] = np.linalg.norm(out)
 
     return sort_faces(res_faces)
 
