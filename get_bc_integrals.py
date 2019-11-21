@@ -51,21 +51,42 @@ def transfer_solution(node_surf, node_vol, res_fields):
 def sort_faces(res_faces):
     # get time steps
     times = []
-    for n in res_faces[1].keys():
+    for n in res_faces[list(res_faces)[0]].keys():
         times.append(float(n.split('_')[1]))
     times = np.unique(np.array(times))
 
     # sort data in arrays according to time steps
     res_array = {'time': times}
+
     for f, f_res in res_faces.items():
-        res_array[f] = {}
         for res_name, res in f_res.items():
             name, time = res_name.split('_')
-            if name not in res_array[f]:
-                res_array[f][name] = np.zeros(times.shape[0])
-            res_array[f][name][np.where(float(time) == times)] = res
+            if name not in res_array:
+                res_array[name] = np.zeros((times.shape[0], max(list(res_faces.keys()))))
+            res_array[name][np.where(float(time) == times), f-1] = res
 
     return res_array
+
+
+def integration(int_input, res_fields):
+    integrator = {}
+    for f in res_fields:
+        # integrate over selected face
+        integrate = vtk.vtkIntegrateAttributes()
+
+        # choose if integral should be divided by volume (=area in this case)
+        if f == 'velocity':
+            integrate.SetDivideAllCellDataByVolume(0)
+        elif f == 'pressure':
+            integrate.SetDivideAllCellDataByVolume(1)
+        else:
+            raise ValueError('Unknown integration for field ' + f)
+
+        integrate.SetInputData(int_input)
+        integrate.Update()
+        integrator[f] = integrate.GetOutput().GetPointData()
+
+    return integrator
 
 
 def integrate_surfaces(reader_surf, cell_surf, res_fields):
@@ -86,18 +107,20 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
             thresh.SetInputArrayToProcess(0, 0, 0, 1, 'BC_FaceID')
             thresh.ThresholdBetween(f, f)
             thresh.Update()
+            thresh_node = thresh.GetOutput().GetPointData()
 
-            # integrate over selected face
-            integrate = vtk.vtkIntegrateAttributes()
-            integrate.SetInputData(thresh.GetOutput())
-            integrate.Update()
-            integrate_node = integrate.GetOutput().GetPointData()
+            # integrate over selected face (separately for pressure and velocity)
+            integrator = integration(thresh.GetOutput(), res_fields)
 
             # get integral for each result
-            for i in range(integrate_node.GetNumberOfArrays()):
-                res_name = integrate_node.GetArrayName(i)
-                if res_name.split('_')[0] in res_fields:
-                    out = numpy_support.vtk_to_numpy(integrate_node.GetArray(res_name))
+            for i in range(thresh_node.GetNumberOfArrays()):
+                res_name = thresh_node.GetArrayName(i)
+                field = res_name.split('_')[0]
+
+                # check if field should be added to output
+                if field in res_fields:
+                    # create new array fo
+                    out = numpy_support.vtk_to_numpy(integrator[field].GetArray(res_name))
 
                     # export scalar
                     if len(out.shape) == 1 and out.shape[0] == 1:
@@ -112,7 +135,7 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
     return sort_faces(res_faces)
 
 
-def integrate_bcs(fpath_surf, fpath_vol, res_fields):
+def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
     # read surface and volume meshes
     reader_surf, node_surf, cell_surf = read_geo(fpath_surf)
     reader_vol, node_vol, _ = read_geo(fpath_vol)
@@ -124,5 +147,6 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields):
     res_faces = integrate_surfaces(reader_surf, cell_surf, res_fields)
 
     # write results for debugging in paraview
-    # write_geo('test.vtp', reader_surf)
+    if debug:
+        write_geo(debug_out, reader_surf)
     return res_faces
