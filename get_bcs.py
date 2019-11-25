@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
-import numpy as np
-import sys, os, re, tkinter, pdb
+import re, tkinter, operator, pdb
+
 
 def get_dic(st):
     assert len(st) % 2 == 0, 'array order is not right'
@@ -13,49 +13,61 @@ def get_dic(st):
         # convert dict value to float if possible
         try:
             val = float(b)
-        except:
+        except ValueError:
             val = b
         dc[a] = val
 
     return dc
 
-def read_array(r, name):
+
+def read_array(r, name, subdic=True):
     exe = r.tk.eval('array get ' + name)
 
     # extract dict components
     st = list(filter(None, re.split(' |({|})', exe)))
 
+    # replace empty dicts by -1
+    st_clean = []
+    i = 0
+    while i < len(st) - 1:
+        if st[i] == '{' and st[i + 1] == '}':
+            st_clean.append('-1')
+            i += 1
+        else:
+            st_clean.append(st[i])
+        i += 1
+    if i == len(st) - 1:
+        st_clean.append(st[-1])
+
     # check for sub-dicts
-    limits = [i for i, s in enumerate(st) if s == '{' or s == '}']
+    limits = [i for i, s in enumerate(st_clean) if s == '{' or s == '}']
+    assert len(limits) % 2 == 0, 'array order is not right'
 
     # assemble string into dict
     if len(limits) == 0:
-        dc = get_dic(st)
+        dc = get_dic(st_clean)
     else:
         dc = {}
         for a, b in zip(limits[::2], limits[1::2]):
-            dc[st[a - 1]] = get_dic(st[a + 1:b])
+            if not subdic:
+                dc[st_clean[a - 1]] = st_clean[a + 1:b]
+            else:
+                dc[st_clean[a - 1]] = get_dic(st_clean[a + 1:b])
 
     return dc
 
-def get_bcs():
-    # name of geometry
-    geo = '0110_0000'
 
-    # folder for tcl files with boundary conditions
-    fpath_bc = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/repos_ready_cpm_scripts'
-
-    # folder for simulation files
-    fpath_sim = '/home/pfaller/work/osmsc/data_uploaded'
-
+def get_bcs(tcl_path):
     # evaluate tcl-script to extract variables
     r = tkinter.Tk()
-    r.tk.eval('source ' + os.path.join(fpath_bc, geo + '-bc.tcl'))
+    r.tk.eval('source ' + tcl_path)
 
     # generate dictionaries from tcl output
     sim_bc = read_array(r, 'sim_bc')
     sim_spid = read_array(r, 'sim_spid')
-    #sim_preid = read_array(r, 'sim_preid')
-    #sim_spname = read_array(r, 'sim_spname')
+    sim_preid = read_array(r, 'sim_preid')
+    sim_spname = read_array(r, 'sim_spname', False)
 
-    return sim_bc, sim_spid
+    bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname}
+    return bcs
+
