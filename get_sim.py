@@ -4,29 +4,6 @@ import numpy as np
 import sys, os, re, tkinter, glob, shutil, subprocess, pdb
 
 
-def copy_files(fpath_sim, fpath_solve, fpath_gen, geo):
-    # TODO: remove, for debugging only
-    shutil.rmtree(fpath_solve)
-
-    # define paths
-    fpath_surf = os.path.join(fpath_solve, 'mesh-complete', 'mesh-surfaces')
-
-    # create simulation folder
-    os.makedirs(fpath_surf)
-
-    # copy generic solver settings
-    shutil.copy('solver.inp', fpath_solve)
-
-    # copy geometry
-    for f in glob.glob(os.path.join(fpath_gen, 'surfaces', geo, '*.vtp')):
-        shutil.copy(f, fpath_surf)
-
-    # copy volume mesh
-    # TODO: copy without results
-    fpath_res = os.path.join(fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
-    shutil.copy(fpath_res, os.path.join(fpath_solve, 'mesh-complete'))
-
-
 # create input file for svpre
 def write_pre(fpath_solve, bc_def, geo):
     fname_pre = os.path.join(fpath_solve, 'sim.svpre')

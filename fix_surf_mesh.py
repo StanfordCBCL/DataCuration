@@ -8,6 +8,7 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 from get_bc_integrals import read_geo, write_geo
+from get_database import Database
 
 
 def write_geo_pv(fname_in, fname_out, ele_id, aname):
@@ -128,6 +129,7 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
 
         if is_unique(surf_cell):
             print('    skipping (GlobalElementID already unique)')
+            surf_cell_new = surf_cell
         else:
             # match GlobalElementID in surface mesh with volume mesh
             # todo: this can probably be done without loops
@@ -142,6 +144,7 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
 
                 surf_cell_new[i] = found[0]
 
+            # compare original 2D GlobalElementID to the fixed one
             assert np.max(np.abs(surf_cell_new - surf_cell)) <= 5, 'round-off error bigger than expected'
 
         # export surface
@@ -166,33 +169,24 @@ def is_fixed(folder_out, fpath_surf):
 
 
 def main():
-    # folder for simulation files
-    fpath_sim = '/home/pfaller/work/osmsc/data_uploaded'
-
-    # folder where generated data is saved
-    fpath_gen = '/home/pfaller/work/osmsc/data_generated'
-
-    # all geometries in repository
-    geometries = os.listdir(fpath_sim)
-    geometries.sort()
-    # geometries = ['0110_0001']
+    # import model database
+    database = Database()
 
     # loop all geometries in repository
     database_surf_fixed = {}
-    for geo in geometries:
+    for geo in database.get_geometries():
         print('Fixing geometry ' + geo)
-        folder_out = os.path.join(fpath_gen, 'surfaces', geo)
+        folder_out = os.path.join(database.fpath_gen, 'surfaces', geo)
         try:
             os.mkdir(folder_out)
         except OSError:
             pass
 
         # get volume mesh path
-        fpath_vol = os.path.join(fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
+        fpath_vol = database.get_volume(geo)
 
         # get all surface mesh paths
-        fpath_surf = glob.glob(os.path.join(fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
-        fpath_surf.append(os.path.join(fpath_sim, geo, 'extras', 'mesh-surfaces', 'extras', 'all_exterior.vtp'))
+        fpath_surf = database.get_surfaces(geo)
 
         if is_fixed(folder_out, fpath_surf):
             print('  skipping (already fixed)')
@@ -203,7 +197,7 @@ def main():
         else:
             database_surf_fixed[geo] = fix_surfaces(fpath_vol, fpath_surf, folder_out)
 
-    fpath_report = os.path.join(fpath_gen, 'database', 'surf_fixed')
+    fpath_report = os.path.join(database.fpath_gen, 'database', 'surf_fixed')
     np.save(fpath_report, database_surf_fixed)
 
 
