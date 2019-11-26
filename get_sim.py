@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np
-import sys, os, re, tkinter, glob, shutil, subprocess, pdb
+import os
 
 
 # create input file for svpre

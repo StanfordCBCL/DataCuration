@@ -2,13 +2,13 @@
 
 import paraview.simple as pv
 import numpy as np
-import os, glob, pdb
+import os
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from get_bc_integrals import read_geo, write_geo
-from get_database import Database
+from .get_bc_integrals import read_geo, write_geo
+from .get_database import Database
 
 
 def write_geo_pv(fname_in, fname_out, ele_id, aname):
@@ -127,11 +127,12 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
         # get surface mesh
         _, surf_cell, surf_conn = get_ids(f)
 
+        # skipping (GlobalElementID already unique)
         if is_unique(surf_cell):
-            print('    skipping (GlobalElementID already unique)')
             surf_cell_new = surf_cell
+
+        # match GlobalElementID in surface mesh with volume mesh
         else:
-            # match GlobalElementID in surface mesh with volume mesh
             # todo: this can probably be done without loops
             surf_cell_new = np.zeros(surf_cell.shape, dtype=int)
             for i, cell in enumerate(surf_conn):

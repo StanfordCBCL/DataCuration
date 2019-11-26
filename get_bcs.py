@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import re, tkinter, operator, pdb
+import re, tkinter
 
 
 def get_dic(st):

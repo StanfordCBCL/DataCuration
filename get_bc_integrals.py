@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np
-import os, vtk, pdb
+import os, vtk
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
