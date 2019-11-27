@@ -58,23 +58,32 @@ def write_pre(fpath_solve, bc_def, geo):
 
 
 # write boundary conditions
-def write_bc(fpath_solve, bcs):
-    fname = os.path.join(fpath_solve, 'rcrt.dat')
+def write_bc(fname, db, geo):
+    # get outlet names
+    outlets = db.get_outlet_names(geo)
+
+    # get boundary conditions
+    bc_def = db.get_bcs(geo)
+
+    # write bc-file
     f = open(fname, 'w+')
 
+    keyword = 'newbcface'
     # not sure if this is right???
-    f.write(repr(len(bcs['bc'].keys())) + '\n')
+    f.write(keyword + '\n')
 
     # write boundary conditions
-    for k, v in bcs['bc'].items():
-        if 'Rp' in v and 'C' in v and 'Rd' in v:
-            f.write(repr(int(bcs['spid'][k])) + '\n')
-            f.write(repr(v['Rp']) + '\n')
-            f.write(repr(v['C']) + '\n')
-            f.write(repr(v['Rd']) + '\n')
+    for s in outlets:
+        bc = bc_def['bc'][s]
+        if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
+            f.write(keyword + '\n')
+            f.write(s + '\n')
+            f.write(repr(bc['Rp']) + '\n')
+            f.write(repr(bc['C']) + '\n')
+            f.write(repr(bc['Rd']) + '\n')
         else:
-            # TODO: what's up with other boundary conditions???
-            pass
+            # todo: what's up with other boundary conditions?
+            raise ValueError('boundary condition not implemented')
 
         # not sure what this does???
         f.write('0.0 0\n')

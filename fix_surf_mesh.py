@@ -3,12 +3,13 @@
 import paraview.simple as pv
 import numpy as np
 import os
+import pdb
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from .get_bc_integrals import read_geo, write_geo
-from .get_database import Database
+from get_bc_integrals import read_geo, write_geo
+from get_database import Database
 
 
 def write_geo_pv(fname_in, fname_out, ele_id, aname):
@@ -117,7 +118,7 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
     :return: True of all 2D meshes were converted successfully
     """
     # read volume mesh
-    _, vol_cell, vol_conn = get_ids(fpath_vol)
+    vol_reader, vol_cell, vol_conn = get_ids(fpath_vol)
 
     # loop all corresponding surface meshes
     for f in fpath_surf:
@@ -125,7 +126,7 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
         print('  mesh ' + surf_fname)
 
         # get surface mesh
-        _, surf_cell, surf_conn = get_ids(f)
+        surf_reader, surf_cell, surf_conn = get_ids(f)
 
         # skipping (GlobalElementID already unique)
         if is_unique(surf_cell):
@@ -151,7 +152,9 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
         # export surface
         fpath_out = os.path.join(folder_out, surf_fname)
         write_geo_pv(f, fpath_out, surf_cell_new, 'GlobalElementID')
+        del surf_reader
     else:
+        del vol_reader
         return True
 
 
@@ -187,7 +190,7 @@ def main():
         fpath_vol = database.get_volume(geo)
 
         # get all surface mesh paths
-        fpath_surf = database.get_surfaces(geo)
+        fpath_surf = database.get_surfaces_upload(geo)
 
         if is_fixed(folder_out, fpath_surf):
             print('  skipping (already fixed)')

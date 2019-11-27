@@ -4,6 +4,11 @@ import re, tkinter
 
 
 def get_dic(st):
+    """
+    assemble string into dict
+    :param st: string
+    :return: dictionary
+    """
     assert len(st) % 2 == 0, 'array order is not right'
     dc = {}
     for i in range(len(st) // 2):
@@ -21,6 +26,13 @@ def get_dic(st):
 
 
 def read_array(r, name, subdic=True):
+    """
+    read tcl array
+    :param r: tkinter object
+    :param name: array name
+    :param subdic: group array in sub-dicts if possible?
+    :return: dictionary
+    """
     exe = r.tk.eval('array get ' + name)
 
     # extract dict components
@@ -43,9 +55,11 @@ def read_array(r, name, subdic=True):
     limits = [i for i, s in enumerate(st_clean) if s == '{' or s == '}']
     assert len(limits) % 2 == 0, 'array order is not right'
 
-    # assemble string into dict
+    # one dictionary
     if len(limits) == 0:
         dc = get_dic(st_clean)
+
+    # several sub-dictionaries
     else:
         dc = {}
         for a, b in zip(limits[::2], limits[1::2]):
@@ -53,7 +67,6 @@ def read_array(r, name, subdic=True):
                 dc[st_clean[a - 1]] = st_clean[a + 1:b]
             else:
                 dc[st_clean[a - 1]] = get_dic(st_clean[a + 1:b])
-
     return dc
 
 

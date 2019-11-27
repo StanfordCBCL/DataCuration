@@ -2,10 +2,10 @@
 
 import os, subprocess, pdb
 import numpy as np
-from .get_bcs import get_bcs
-from .get_sim import write_pre, write_bc
-from .get_bc_integrals import integrate_bcs
-from .get_database import Database, SimVascular
+from get_bcs import get_bcs
+from get_sim import write_pre, write_bc
+from get_bc_integrals import integrate_bcs
+from get_database import Database, SimVascular
 
 
 def geo_integrate_bcs(fpath_sim, geo, res_fields, debug=False, debug_out=''):

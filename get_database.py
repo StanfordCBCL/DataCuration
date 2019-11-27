@@ -7,6 +7,7 @@ import subprocess
 
 import numpy as np
 
+from get_bcs import get_bcs
 
 class Database:
     def __init__(self):
@@ -66,7 +67,7 @@ class Database:
         np.save(self.fpath_save, self.database)
 
     def load(self):
-        self.database = np.load(self.fpath_save, allow_pickle=True).item()
+        self.database = np.load(self.fpath_save + '.npy', allow_pickle=True).item()
         return self.database
 
     def add(self):
@@ -81,6 +82,9 @@ class Database:
         geometries.sort()
         return geometries
 
+    def get_bcs(self, geo):
+        return get_bcs(self.get_bc_path(geo))
+
     def get_bc_path(self, geo):
         geo_bc = geo.split('_')[0] + '_' + str(int(geo.split('_')[1]) - 1).zfill(4)
         return os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
@@ -88,13 +92,55 @@ class Database:
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
 
-    def get_surfaces(self, geo):
+    def get_flow(self, geo):
+        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
+
+    def get_solve_dir(self, geo):
+        fsolve = os.path.join(self.fpath_solve, geo)
+        os.makedirs(fsolve, exist_ok=True)
+        return fsolve
+
+    def get_solve_dir_1d(self, geo):
+        fsolve = os.path.join(self.fpath_solve, geo, '1d')
+        os.makedirs(fsolve, exist_ok=True)
+        return fsolve
+
+    def get_surface_dir(self, geo):
+        return os.path.join(self.fpath_gen, 'surfaces', geo)
+
+    def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
         surfaces.append(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', 'extras', 'all_exterior.vtp'))
         return surfaces
 
+    def get_surfaces(self, geo, surf='all'):
+        fdir = self.get_surface_dir(geo)
+        surfaces_all = glob.glob(os.path.join(fdir, '*.vtp'))
+        if surf == 'all':
+            surfaces = surfaces_all
+        elif surf == 'inflow':
+            surfaces = os.path.join(fdir, 'inflow.vtp')
+        elif surf == 'all_exterior':
+            surfaces = os.path.join(fdir, 'all_exterior.vtp')
+        elif surf == 'outlets' or surf == 'caps':
+            if surf == 'outlets':
+                exclude = ['all_exterior', 'wall', 'inflow']
+            elif surf == 'caps':
+                exclude = ['all_exterior', 'wall']
+            surfaces = [x for x in surfaces_all if not any(e in x for e in exclude)]
+        else:
+            print('Unknown surface option ' + surf)
+            surfaces = []
+        return surfaces
+
     def get_volume(self, geo):
         return os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
+
+    def get_outlet_names(self, geo):
+        outlets = self.get_surfaces(geo, 'outlets')
+        outlets = [os.path.splitext(os.path.basename(s))[0] for s in outlets]
+        outlets.sort()
+        return outlets
 
     def copy_files(self, geo):
         # define paths
@@ -123,9 +169,13 @@ class SimVascular:
     def __init__(self):
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
+        self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
 
     def run_pre(self, pre_folder, pre_file):
         subprocess.run([self.svpre, pre_file], cwd=pre_folder)
 
-    def run_solver(self, run_folder, run_file):
-        subprocess.run([self.svsolver, 'solver.inp'], cwd=run_folder)
+    def run_solver(self, run_folder, run_file='solver.inp'):
+        subprocess.run([self.svsolver, run_file], cwd=run_folder)
+
+    def run_solver_id(self, run_folder, run_file='solver.inp'):
+        subprocess.run([self.onedsolver, run_file], cwd=run_folder)
