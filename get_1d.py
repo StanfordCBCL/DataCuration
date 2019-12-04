@@ -30,7 +30,7 @@ def read_results_1d(fpath_1d, geo):
         # loop segments
         results_1d[field] = {}
         for f_res in result_list_1d:
-            with open(f_res, 'r') as f:
+            with open(f_res) as f:
                 reader = csv.reader(f, delimiter=' ')
 
                 # loop nodes

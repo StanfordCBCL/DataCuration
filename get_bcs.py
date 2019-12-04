@@ -90,5 +90,9 @@ def get_bcs(tcl, tcl_bc):
     r.tk.eval('source ' + tcl)
     units = r.tk.getvar('sim_units')
 
+    # close windows
+    r_bc.destroy()
+    r.destroy()
+
     return bcs, units
 
