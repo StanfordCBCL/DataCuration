@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-import re, tkinter
+import re
+import tkinter
 
 
 def get_dic(st):
@@ -70,17 +71,24 @@ def read_array(r, name, subdic=True):
     return dc
 
 
-def get_bcs(tcl_path):
-    # evaluate tcl-script to extract variables
-    r = tkinter.Tk()
-    r.tk.eval('source ' + tcl_path)
+def get_bcs(tcl, tcl_bc):
+    # evaluate tcl-script to extract variables for boundary conditions
+    r_bc = tkinter.Tk()
+    r_bc.tk.eval('source ' + tcl_bc)
 
     # generate dictionaries from tcl output
-    sim_bc = read_array(r, 'sim_bc')
-    sim_spid = read_array(r, 'sim_spid')
-    sim_preid = read_array(r, 'sim_preid')
-    sim_spname = read_array(r, 'sim_spname', False)
+    sim_bc = read_array(r_bc, 'sim_bc')
+    sim_spid = read_array(r_bc, 'sim_spid')
+    sim_preid = read_array(r_bc, 'sim_preid')
+    sim_spname = read_array(r_bc, 'sim_spname', False)
 
     bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname}
-    return bcs
+
+    # evaluate tcl-script to extract variables for general simulation parameters
+    r = tkinter.Tk()
+    # todo: handle non-existing function math_addVectors
+    r.tk.eval('source ' + tcl)
+    units = r.tk.getvar('sim_units')
+
+    return bcs, units
 

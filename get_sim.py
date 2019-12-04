@@ -57,13 +57,35 @@ def write_pre(fpath_solve, bc_def, geo):
     return fname_pre
 
 
+def write_value(bc, name, units):
+    symbol = name[0]
+
+    # no conversion for units cgs
+    if units == 'cm':
+        bc_str = float(bc[name])
+
+    # convert cgm to cgs
+    elif units == 'mm':
+        if symbol == 'R':
+            bc_str = float(bc[name]) * 1e4
+        elif symbol == 'C':
+            bc_str = float(bc[name]) * 1e-4
+        else:
+            raise ValueError('Unknown boundary condition symbol ' + name)
+    else:
+        raise ValueError('Unknown units ' + units)
+    return str(bc_str)
+
+
 # write boundary conditions
 def write_bc(fname, db, geo):
+    # get boundary conditions
+    bc_def, units = db.get_bcs(geo)
+    if not bc_def:
+        return False
+
     # get outlet names
     outlets = db.get_outlet_names(geo)
-
-    # get boundary conditions
-    bc_def = db.get_bcs(geo)
 
     # write bc-file
     f = open(fname, 'w+')
@@ -78,12 +100,13 @@ def write_bc(fname, db, geo):
         if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
             f.write(keyword + '\n')
             f.write(s + '\n')
-            f.write(repr(bc['Rp']) + '\n')
-            f.write(repr(bc['C']) + '\n')
-            f.write(repr(bc['Rd']) + '\n')
+            f.write(write_value(bc, 'Rp', units) + '\n')
+            f.write(write_value(bc, 'C', units) + '\n')
+            f.write(write_value(bc, 'Rd', units) + '\n')
         else:
             # todo: what's up with other boundary conditions?
-            raise ValueError('boundary condition not implemented')
+            print('boundary condition not implemented')
+            return False
 
         # not sure what this does???
         f.write('0.0 0\n')
@@ -91,4 +114,4 @@ def write_bc(fname, db, geo):
 
     f.close()
 
-    return fname
+    return True

@@ -9,6 +9,7 @@ import numpy as np
 
 from get_bcs import get_bcs
 
+
 class Database:
     def __init__(self):
         # folder for tcl files with boundary conditions
@@ -83,14 +84,21 @@ class Database:
         return geometries
 
     def get_bcs(self, geo):
-        return get_bcs(self.get_bc_path(geo))
+        tcl, tcl_bc = self.get_tcl_paths(geo)
+        if os.path.exists(tcl) and os.path.exists(tcl_bc):
+            return get_bcs(tcl, tcl_bc)
+        else:
+            return None, None
 
-    def get_bc_path(self, geo):
+    def get_tcl_paths(self, geo):
         geo_bc = geo.split('_')[0] + '_' + str(int(geo.split('_')[1]) - 1).zfill(4)
-        return os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
+        return os.path.join(self.fpath_bc, geo_bc + '.tcl'), os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
 
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
+
+    def get_flow_path(self, geo):
+        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
 
     def get_flow(self, geo):
         return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
@@ -177,5 +185,5 @@ class SimVascular:
     def run_solver(self, run_folder, run_file='solver.inp'):
         subprocess.run([self.svsolver, run_file], cwd=run_folder)
 
-    def run_solver_id(self, run_folder, run_file='solver.inp'):
+    def run_solver_1d(self, run_folder, run_file='solver.inp'):
         subprocess.run([self.onedsolver, run_file], cwd=run_folder)
