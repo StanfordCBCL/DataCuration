@@ -83,7 +83,7 @@ def generate_1d(db, geo):
     inflow = np.tile(inflow, n_cycle)
 
     # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
-    np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, inflow)).T)
+    np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, - inflow)).T)
 
     # set simulation time as end of 3d simulation
     # todo: cyclic 1d simulation

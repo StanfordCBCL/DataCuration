@@ -130,8 +130,7 @@ class Database:
         return surfaces
 
     def add_cap_ordered(self, caps, keys_ordered, keys_left, c):
-        keys = sorted(caps.keys())
-        for k in keys:
+        for k in sorted(caps.keys()):
             if c in k.lower() and k in keys_left:
                 keys_ordered.append(k)
                 keys_left.remove(k)
@@ -258,15 +257,21 @@ class Database:
         for f in post.fields:
             res[f] = {}
             for k, v in caps.items():
-                # get first or last element in 1d segment
+                s_3d = 1
                 if k == 'inflow':
+                    # get first 1d segment
                     i_1d = 0
+
+                    # reverse flow direction so that all caps have positive flow (looks nicer)
+                    if f == 'flow':
+                        s_3d = -1
                 else:
+                    # get last element in 1d segment
                     i_1d = -1
 
                 res[f][k] = {}
                 res[f][k]['1d'] = res_1d[f][v['GroupId']][i_1d]
-                res[f][k]['3d'] = res_3d[f][:, v['BC_FaceID'] - 1]
+                res[f][k]['3d'] = res_3d[f][:, v['BC_FaceID'] - 1] * s_3d
                 n_t.append(res[f][k]['1d'].shape[0])
 
         # check if all 1d solutions have the same number of time steps

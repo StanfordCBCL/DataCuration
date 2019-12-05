@@ -2,6 +2,7 @@
 
 import os
 import vtk
+import pdb
 
 import numpy as np
 from vtk.util.numpy_support import numpy_to_vtk as n2v
@@ -81,8 +82,13 @@ class Integration:
     def evaluate(self, field, res_name):
         int_out = self.integrator.GetOutput()
 
+        if field == 'velocity':
+            int_name = 'normal_' + res_name
+        else:
+            int_name = res_name
+
         # evaluate integral
-        integral = v2n(int_out.GetPointData().GetArray(res_name))
+        integral = v2n(int_out.GetPointData().GetArray(int_name))
 
         # evaluate surface area
         area = v2n(int_out.GetCellData().GetArray('Area'))[0]
@@ -90,17 +96,15 @@ class Integration:
         # choose if integral should be divided by area
         if field == 'velocity':
             out = integral
-        elif field == 'pressure':
-            out = integral / area
         else:
-            raise ValueError('Unknown integration for field ' + field)
+            out = integral / area
 
         return out
 
 
-def threshold(reader, t):
+def threshold(inp, t):
     thresh = vtk.vtkThreshold()
-    thresh.SetInputConnection(reader.GetOutputPort())
+    thresh.SetInputConnection(inp.GetOutputPort())
     thresh.SetInputArrayToProcess(0, 0, 0, 1, 'BC_FaceID')
     thresh.ThresholdBetween(t, t)
     thresh.Update()
@@ -108,7 +112,40 @@ def threshold(reader, t):
     return thresh, thresh_node
 
 
+def add_calculator(inp, velocities):
+    res_name = velocities[-1]
+    calc = vtk.vtkArrayCalculator()
+    calc.AddVectorArrayName('Normals')
+    calc.AddVectorArrayName(res_name)
+    calc.SetInputData(inp.GetOutput())
+    calc.SetAttributeModeToUsePointData()
+    calc.SetFunction('Normals.' + res_name)
+    calc.SetResultArrayName('normal_' + res_name)
+    calc.Update()
+
+    velocities.pop()
+    if not velocities:
+        return calc
+    else:
+        return add_calculator(calc, velocities)
+
+
 def integrate_surfaces(reader_surf, cell_surf, res_fields):
+    # generate surface normals
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputData(reader_surf.GetOutput())
+    normals.Update()
+
+    # get names of all velocity results
+    velocities = []
+    for i in range(normals.GetOutput().GetPointData().GetNumberOfArrays()):
+        res_name = normals.GetOutput().GetPointData().GetArrayName(i)
+        if res_name.split('_')[0] == 'velocity':
+            velocities.append(res_name)
+
+    # recursively add calculators for normal velocities
+    calc = add_calculator(normals, velocities)
+
     # boundary faces
     faces = np.unique(v2n(cell_surf.GetArray('BC_FaceID')).astype(int))
     res_faces = {}
@@ -121,7 +158,7 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
             res_faces[f] = {}
 
             # threshhold face
-            thresh, thresh_node = threshold(reader_surf, f)
+            thresh, thresh_node = threshold(calc, f)
 
             # integrate over selected face (separately for pressure and velocity)
             integrator = Integration(thresh.GetOutput())
@@ -135,7 +172,7 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
                 if field in res_fields:
                     # perform integration
                     out = integrator.evaluate(field, res_name)
-                    res_faces[f][res_name] = np.linalg.norm(out)
+                    res_faces[f][res_name] = out
 
     return sort_faces(res_faces)
 
