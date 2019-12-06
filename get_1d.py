@@ -8,6 +8,7 @@ import glob
 import csv
 import re
 import pdb
+import contextlib, io
 
 from get_database import Database, SimVascular
 from get_sim import write_bc
@@ -47,7 +48,7 @@ def read_results_1d(fpath_1d, geo):
 
 def generate_1d(db, geo):
     # number of cycles to run
-    n_cycle = 10
+    n_cycle = 20
 
     # set simulation paths and create folders
     fpath_1d = db.get_solve_dir_1d(geo)
@@ -59,15 +60,13 @@ def generate_1d(db, geo):
     # write outlet boundary conditions to file if they exist
     fpath_outlet_bcs = os.path.join(fpath_1d, 'rcrt.dat')
     if not write_bc(fpath_outlet_bcs, db, geo):
-        # todo: log non-existing boundary conditions
-        return False
+        return False, 'non-existing boundary conditions'
 
     # copy surface model to folder if it exists
     if os.path.exists(db.get_surfaces(geo, 'all_exterior')):
         shutil.copy2(db.get_surfaces(geo, 'all_exterior'), fpath_geo)
     else:
-        # todo: log non-existing 3d geometry
-        return False
+        return False, 'non-existing 3d geometry'
 
     # read inflow conditions
     flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
@@ -75,25 +74,24 @@ def generate_1d(db, geo):
     # read 3d boundary conditions
     bc_def, _ = db.get_bcs(geo)
 
-    # repeat cycles
+    # repeat cycles (one more than n_cycle to guarantee inflow data in case of round-off errors with time steps)
     time = flow['time']
     inflow = flow['velocity'][:, int(bc_def['preid']['inflow']) - 1]
-    for i in range(n_cycle - 1):
+    for i in range(n_cycle):
         time = np.append(time, flow['time'] + time[-1])
-    inflow = np.tile(inflow, n_cycle)
+    inflow = np.tile(inflow, n_cycle + 1)
 
     # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
     np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, - inflow)).T)
 
     # set simulation time as end of 3d simulation
-    # todo: cyclic 1d simulation
     tmax = time[-1]
 
     # global settings
-    element_size = 0.01
-    min_num_elems = 100
-    time_step = 1e-3
-    num_time_steps = tmax // time_step
+    element_size = 0.1
+    min_num_elems = 10
+    dt = 1e-3
+    num_dts = int(time['time'][-1] / dt + 0.5) * n_cycle
     save_data_freq = 1
 
     # copy cap surfaces to simulation folder
@@ -107,64 +105,60 @@ def generate_1d(db, geo):
             f.write(s + '\n')
 
     try:
-        # use all options, set to None if using defaults (in cgs units)
-        mesh = oned.run(boundary_surfaces_directory=fpath_surf,
-                        centerlines_input_file=None,
-                        centerlines_output_file=os.path.join(fpath_1d, 'centerlines.vtp'),
-                        compute_centerlines=True,
-                        compute_mesh=True,
-                        density=None,
-                        element_size=element_size,
-                        inlet_face_input_file='inflow.vtp',
-                        inflow_input_file=os.path.join(fpath_1d, 'inflow.flow'),
-                        linear_material_ehr=1e15,
-                        linear_material_pressure=None,
-                        material_model=None,
-                        mesh_output_file='mesh.vtp',
-                        min_num_elements=min_num_elems,
-                        model_name=geo,
-                        num_time_steps=num_time_steps,
-                        olufsen_material_k1=None,
-                        olufsen_material_k2=None,
-                        olufsen_material_k3=None,
-                        olufsen_material_exp=None,
-                        olufsen_material_pressure=None,
-                        outflow_bc_input_file=fpath_outlet_bcs,
-                        outflow_bc_type='rcr',
-                        outlet_face_names_input_file=fpath_outlets,
-                        output_directory=fpath_1d,
-                        solver_output_file='solver.inp',
-                        save_data_frequency=save_data_freq,
-                        surface_model=os.path.join(fpath_geo, 'all_exterior.vtp'),
-                        time_step=time_step,
-                        uniform_bc=True,
-                        units=None,
-                        viscosity=None,
-                        wall_properties_input_file=None,
-                        wall_properties_output_file=None,
-                        write_mesh_file=True,
-                        write_solver_file=True)
+        f_io = io.StringIO()
+        with contextlib.redirect_stdout(f_io):
+            # use all options, set to None if using defaults (in cgs units)
+            oned.run(boundary_surfaces_directory=fpath_surf,
+                     centerlines_input_file=None,
+                     centerlines_output_file=os.path.join(fpath_1d, 'centerlines.vtp'),
+                     compute_centerlines=True,
+                     compute_mesh=True,
+                     density=None,
+                     element_size=element_size,
+                     inlet_face_input_file='inflow.vtp',
+                     inflow_input_file=os.path.join(fpath_1d, 'inflow.flow'),
+                     linear_material_ehr=1e15,
+                     linear_material_pressure=None,
+                     material_model=None,
+                     mesh_output_file='mesh.vtp',
+                     min_num_elements=min_num_elems,
+                     model_name=geo,
+                     num_dts=num_dts,
+                     olufsen_material_k1=None,
+                     olufsen_material_k2=None,
+                     olufsen_material_k3=None,
+                     olufsen_material_exp=None,
+                     olufsen_material_pressure=None,
+                     outflow_bc_input_file=fpath_outlet_bcs,
+                     outflow_bc_type='rcr',
+                     outlet_face_names_input_file=fpath_outlets,
+                     output_directory=fpath_1d,
+                     solver_output_file='solver.inp',
+                     save_data_frequency=save_data_freq,
+                     surface_model=os.path.join(fpath_geo, 'all_exterior.vtp'),
+                     dt=dt,
+                     uniform_bc=True,
+                     units=None,
+                     viscosity=None,
+                     wall_properties_input_file=None,
+                     wall_properties_output_file=None,
+                     write_mesh_file=True,
+                     write_solver_file=True)
     except (KeyError, ZeroDivisionError, RuntimeError) as e:
         # todo KeyError: log geometries with multiple inlets
         # todo ZeroDivisionError:
         #   0070_0001: Cannot read cell data array "GlobalElementID" from PointData in piece 0.  The data array in the element may be too short.
         # todo RuntimeError:
         #   0098_0001: Inlet group id is not 0 or number of centerlines is not equal to the number of outlets
-        return False
+        return False, repr(e)
 
-    return True
+    return True, f_io.getvalue()
 
 
 def main():
     db = Database()
     sv = SimVascular()
 
-    # get list of 3d results
-    # res_3d = glob.glob(os.path.join(db.fpath_gen, 'bc_flow', '*.npy'))
-    # geometries = [os.path.splitext(os.path.basename(s))[0] for s in res_3d]
-
-    # for geo in ['0108_0001']:
-    # for geo in ['0110_0001']:
     for geo in db.get_geometries():
         print('Running geometry ' + geo)
 
@@ -176,15 +170,21 @@ def main():
             continue
 
         # generate oneDSolver input file and check if successful
-        if generate_1d(db, geo):
+        success_gen, out_gen = generate_1d(db, geo)
+        with open(os.path.join(db.get_solve_dir_1d(geo), 'generate_1d.log'), 'w+') as f:
+            f.write(out_gen)
+
+        if success_gen:
             # run oneDSolver
-            sv.run_solver_1d(db.get_solve_dir_1d(geo))
+            success_solve, out_solve = sv.run_solver_1d(db.get_solve_dir_1d(geo))
+            with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
+                f.write(out_solve)
 
             # extract results
             results_1d = read_results_1d(db.get_solve_dir_1d(geo), geo)
             np.save(fpath_out, results_1d)
         else:
-            print('  skipping (no boundary conditions found)')
+            print('  skipping (1d model creation failed)')
 
 
 if __name__ == '__main__':

@@ -5,8 +5,11 @@ import shutil
 import glob
 import subprocess
 import csv
+import re
+import pdb
 
 import numpy as np
+import scipy.interpolate
 from collections import OrderedDict
 
 from get_bcs import get_bcs
@@ -22,6 +25,9 @@ class Database:
 
         # folder where generated data is saved
         self.fpath_gen = '/home/pfaller/work/osmsc/data_generated'
+
+        # folder containing model images
+        self.fpath_png = '/home/pfaller/work/osmsc/data_png'
 
         # folder where simulation is run
         self.fpath_solve = '/home/pfaller/work/osmsc/simulation'
@@ -92,12 +98,21 @@ class Database:
         else:
             return None, None
 
+    def get_png(self, geo):
+        return os.path.join(self.fpath_png, 'OSMSC' + geo + '-sim.png')
+
+    def get_flow(self, geo):
+        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
+
     def get_tcl_paths(self, geo):
         geo_bc = geo.split('_')[0] + '_' + str(int(geo.split('_')[1]) - 1).zfill(4)
         return os.path.join(self.fpath_bc, geo_bc + '.tcl'), os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
 
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
+
+    def get_0d_flow_path(self, geo):
+        return os.path.join(self.fpath_gen, '0d_flow', geo + '.npy')
 
     def get_1d_flow_path(self, geo):
         return os.path.join(self.fpath_gen, '1d_flow', geo + '.npy')
@@ -108,16 +123,18 @@ class Database:
     def get_groupid_path(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), 'outletface_groupid.dat')
 
-    def get_flow(self, geo):
-        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
-
     def get_solve_dir(self, geo):
         fsolve = os.path.join(self.fpath_solve, geo)
         os.makedirs(fsolve, exist_ok=True)
         return fsolve
 
+    def get_solve_dir_0d(self, geo):
+        fsolve = os.path.join(self.get_solve_dir(geo), '0d')
+        os.makedirs(fsolve, exist_ok=True)
+        return fsolve
+
     def get_solve_dir_1d(self, geo):
-        fsolve = os.path.join(self.fpath_solve, geo, '1d')
+        fsolve = os.path.join(self.get_solve_dir(geo), '1d')
         os.makedirs(fsolve, exist_ok=True)
         return fsolve
 
@@ -135,7 +152,7 @@ class Database:
                 keys_ordered.append(k)
                 keys_left.remove(k)
 
-    def get_3d_1d_map(self, geo):
+    def get_xd_map(self, geo):
         # add inlet GroupId
         caps = {'inflow': {}}
         caps['inflow']['GroupId'] = 0
@@ -150,6 +167,14 @@ class Database:
         bcs, _ = self.get_bcs(geo)
         for k in caps.keys():
             caps[k]['BC_FaceID'] = int(bcs['preid'][k])
+
+        # add inlet/oulet SegIds
+        result_list_1d = glob.glob(os.path.join(self.get_solve_dir_1d(geo), geo + 'Group*Seg*_pressure.dat'))
+        for f_res in result_list_1d:
+            nums = re.findall(r'\d+', f_res)
+            for k in caps.keys():
+                if caps[k]['GroupId'] == int(nums[-2]):
+                    caps[k]['SegId'] = int(nums[-1])
 
         # nicely ordered cap names for output
         keys_left = sorted(caps.keys())
@@ -236,6 +261,10 @@ class Database:
         post = Post()
 
         # read results
+        # res_0d = self.read_results(geo, self.get_0d_flow_path(geo))
+        # if res_0d is None:
+        #     return None, None
+
         res_1d = self.read_results(geo, self.get_1d_flow_path(geo))
         if res_1d is None:
             return None, None
@@ -245,11 +274,26 @@ class Database:
             return None, None
 
         # get map between 3d BC_FaceID and 1d GroupId for all inlet/outlets
-        caps = self.get_3d_1d_map(geo)
+        caps = self.get_xd_map(geo)
 
         # rename 3d results
         res_3d['flow'] = res_3d['velocity']
         del res_3d['velocity']
+
+        # time steps
+        time = {'3d': res_3d['time']}
+
+        n_cycle = 20
+        dt = 1e-3
+        step_cycle = int(time['3d'][-1] // dt)
+        tmax = step_cycle * dt
+        time['1d'] = np.arange(0, tmax, dt)
+        time['step_cycle'] = step_cycle
+        time['n_cycle'] = n_cycle
+
+        # total simulation times
+        # time['time_0d_all'] = res_0d['time']
+        time['time_1d_all'] = np.arange(0, int(time['3d'][-1] // dt * n_cycle) * dt, dt)
 
         # collect results
         res = {}
@@ -269,28 +313,36 @@ class Database:
                     # get last element in 1d segment
                     i_1d = -1
 
+                # extract simulation results at caps
                 res[f][k] = {}
-                res[f][k]['1d'] = res_1d[f][v['GroupId']][i_1d]
+
+                # if v['SegId'] in res_0d[f]:
+                #     res[f][k]['0d_all'] = res_0d[f][v['SegId']]
+                # else:
+                #     res[f][k]['0d_all'] = np.zeros(time['time_0d_all'].shape)
+
+                res[f][k]['1d_all'] = res_1d[f][v['GroupId']][i_1d]
                 res[f][k]['3d'] = res_3d[f][:, v['BC_FaceID'] - 1] * s_3d
-                n_t.append(res[f][k]['1d'].shape[0])
 
-        # check if all 1d solutions have the same number of time steps
-        n_t = np.unique(np.array(n_t))
-        if n_t.shape[0] > 1:
-            print('conflicting number of time steps: ' + repr(n_t))
-            return None, None
+                if not step_cycle * n_cycle == res[f][k]['1d_all'].shape[0]:
+                    print('time steps not matching results for 1d results ' + f + ' in GroupId ' + repr(v['GroupId']))
+                    return None, None
 
-        # time
-        time = {'3d': res_3d['time']}
+                # # interpolate 0d results to 3d time steps of last cycle
+                # interp = scipy.interpolate.interp1d(time['time_0d_all'], res[f][k]['0d_all'])
+                #
+                # # 3d-time moved to the last full 1d cycle (for interpolation)
+                # n_cycle_0d = int(time['time_0d_all'][-1] // res_3d['time'][-1])
+                # time_3d_last_0d = res_3d['time'] + (n_cycle_0d - 1) * res_3d['time'][-1]
+                # res[f][k]['0d'] = interp(time_3d_last_0d)
 
-        n_cycle = 10
-        dt = 1e-3
-        step_cycle = int(time['3d'][-1] / dt)
-        tmax = step_cycle * dt
-        time['1d'] = np.arange(0, tmax, dt)
-        time['step_cycle'] = step_cycle
-        time['n_max'] = step_cycle * n_cycle
-        time['n_cycle'] = n_cycle
+                # interpolate 1d results to 3d time steps of last cycle
+                interp = scipy.interpolate.interp1d(time['time_1d_all'], res[f][k]['1d_all'])
+
+                # 3d-time moved to the last full 1d cycle (for interpolation)
+                n_cycle_1d = int(time['time_1d_all'][-1] // res_3d['time'][-1])
+                time_3d_last_1d = res_3d['time'] + (n_cycle_1d - 1) * res_3d['time'][-1]
+                res[f][k]['1d'] = interp(time_3d_last_1d)
 
         return res, time
 
@@ -311,7 +363,8 @@ class SimVascular:
         subprocess.run([self.svsolver, run_file], cwd=run_folder)
 
     def run_solver_1d(self, run_folder, run_file='solver.inp'):
-        subprocess.run([self.onedsolver, run_file], cwd=run_folder)
+        out = subprocess.run([self.onedsolver, run_file], cwd=run_folder, stdout=subprocess.PIPE)
+        return not out.stderr, out.stdout.decode('utf-8')
 
 
 class Post:
@@ -319,9 +372,13 @@ class Post:
         db = Database()
         self.fields = ['pressure', 'flow']
         self.units = {'pressure': 'mmHg', 'flow': 'l/h'}
-        self.models = ['1d', '3d']
-        self.styles = {'1d': '-', '3d': '--'}
+        self.styles = {'3d': '-', '1d': '--', '0d': ':'}
 
         cgs2mmhg = 7.50062e-4
         mlps2lph = 60 / 1000
         self.convert = {'pressure': cgs2mmhg, 'flow': mlps2lph}
+
+        self.models = OrderedDict()
+
+        # sets the plot order
+        self.models = ['3d', '1d'] #'0d',

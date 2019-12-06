@@ -22,8 +22,8 @@ def main():
     post = Post()
 
     # loop geometries in repository
-    # for geo in db.get_geometries():
-    for geo in ['0110_0001']:
+    for geo in db.get_geometries():
+    # for geo in ['0110_0001']:
         # # get boundary integrals
         # bc_flow_path = db.get_bc_flow_path(geo)
         # if not os.path.exists(bc_flow_path):
@@ -34,7 +34,7 @@ def main():
         # if not os.path.exists(bc_path):
         #     continue
         #
-        # print('Processing ' + geo)
+        print('Processing ' + geo)
         #
         # fpath_solve_geo = os.path.join(db.fpath_solve, geo)
         # try:
@@ -55,19 +55,19 @@ def main():
         bc_flow = geo_integrate_bcs(db.fpath_sim, geo, ['pressure', 'velocity'], debug=True, debug_out=fpath_bc_debug)
         np.save(db.get_bc_flow_path(geo), bc_flow)
 
-        exit(0)
+        # exit(0)
         # except AttributeError:
         #     print('   failed!')
 
-        db.copy_files(geo)
-        fname_pre = write_pre(fpath_solve_geo, bc_def, geo)
-        fname_bc = write_bc(fpath_solve_geo, bc_def)
-
-        # run pre-processor
-        pre_folder, pre_file = os.path.split(fname_pre)
-        sv = SimVascular()
-        sv.run_pre(pre_folder, pre_file)
-        sv.run_solver(pre_folder, 'solver.inp')
+        # db.copy_files(geo)
+        # fname_pre = write_pre(fpath_solve_geo, bc_def, geo)
+        # fname_bc = write_bc(fpath_solve_geo, bc_def)
+        #
+        # # run pre-processor
+        # pre_folder, pre_file = os.path.split(fname_pre)
+        # sv = SimVascular()
+        # sv.run_pre(pre_folder, pre_file)
+        # sv.run_solver(pre_folder, 'solver.inp')
 
 
 if __name__ == '__main__':
