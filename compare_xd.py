@@ -28,7 +28,7 @@ def plot_1d_3d_all(db, geo, res, time):
     # get 1d/3d map
     caps = db.get_xd_map(geo)
 
-    fig, ax = plt.subplots(len(post.fields), len(post.models), figsize=(20, 10), dpi=300, sharex=True, sharey='col')
+    fig, ax = plt.subplots(len(post.fields), len(post.models), figsize=(20, 10), dpi=300, sharex='col', sharey='row')
 
     for i, f in enumerate(post.fields):
         for j, m in enumerate(post.models):
@@ -41,7 +41,7 @@ def plot_1d_3d_all(db, geo, res, time):
                 ax[i, j].set_ylabel(f + ' [' + post.units[f] + ']')
 
             for c in caps.keys():
-                ax[i, j].plot(time['3d'], res[f][c][m][-time['step_cycle']:] * post.convert[f])
+                ax[i, j].plot(time[m + '_all'], res[f][c][m + '_all'] * post.convert[f])
 
     add_image(db, geo, fig)
     fig.savefig(os.path.join(db.fpath_gen, '1d_3d_comparison', geo + '_1d_3d_all.png'))
@@ -67,7 +67,7 @@ def plot_1d_3d_cyclic(db, geo, res, time):
             if j == 0:
                 ax[i, j].set_ylabel(f + ' [' + post.units[f] + ']')
 
-            res_split = np.split(res[f][c]['1d_all'], time['n_cycle'])
+            res_split = np.split(res[f][c]['1d_all'][:time['step_cycle'] * time['n_cycle']], time['n_cycle'])
             for r in res_split:
                 ax[i, j].plot(time['1d'], r * post.convert[f], post.styles['1d'])
 
@@ -113,8 +113,8 @@ def main():
     # get model database
     db = Database()
 
-    for geo in db.get_geometries():
-    # for geo in ['0001_0001']:
+    # for geo in db.get_geometries():
+    for geo in ['0071_0001']:
         print('Comparing geometry ' + geo)
 
         # read results

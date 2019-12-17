@@ -281,9 +281,10 @@ class Database:
         del res_3d['velocity']
 
         # time steps
-        time = {'3d': res_3d['time']}
+        time = {'3d': res_3d['time'],
+                '3d_all': res_3d['time']}
 
-        n_cycle = 20
+        n_cycle = 10
         dt = 1e-3
         step_cycle = int(time['3d'][-1] // dt)
         tmax = step_cycle * dt
@@ -293,7 +294,8 @@ class Database:
 
         # total simulation times
         # time['time_0d_all'] = res_0d['time']
-        time['time_1d_all'] = np.arange(0, int(time['3d'][-1] // dt * n_cycle) * dt, dt)
+        # time['1d_all'] = np.arange(0, int(time['3d'][-1] // dt * n_cycle) * dt, dt)
+        time['1d_all'] = np.arange(0, res_1d['pressure'][0].shape[1] + 1)[1:] * dt
 
         # collect results
         res = {}
@@ -323,9 +325,11 @@ class Database:
 
                 res[f][k]['1d_all'] = res_1d[f][v['GroupId']][i_1d]
                 res[f][k]['3d'] = res_3d[f][:, v['BC_FaceID'] - 1] * s_3d
+                res[f][k]['3d_all'] = res[f][k]['3d']
 
-                if not step_cycle * n_cycle == res[f][k]['1d_all'].shape[0]:
+                if not time['1d_all'].shape[0] == res[f][k]['1d_all'].shape[0]:
                     print('time steps not matching results for 1d results ' + f + ' in GroupId ' + repr(v['GroupId']))
+                    pdb.set_trace()
                     return None, None
 
                 # # interpolate 0d results to 3d time steps of last cycle
@@ -337,12 +341,18 @@ class Database:
                 # res[f][k]['0d'] = interp(time_3d_last_0d)
 
                 # interpolate 1d results to 3d time steps of last cycle
-                interp = scipy.interpolate.interp1d(time['time_1d_all'], res[f][k]['1d_all'])
+                interp = scipy.interpolate.interp1d(time['1d_all'], res[f][k]['1d_all'])
 
                 # 3d-time moved to the last full 1d cycle (for interpolation)
-                n_cycle_1d = int(time['time_1d_all'][-1] // res_3d['time'][-1])
-                time_3d_last_1d = res_3d['time'] + (n_cycle_1d - 1) * res_3d['time'][-1]
-                res[f][k]['1d'] = interp(time_3d_last_1d)
+                n_cycle_1d = int(time['1d_all'][-1] // res_3d['time'][-1])
+                if n_cycle_1d == 0:
+                    res[f][k]['1d'] = np.zeros(res_3d['time'].shape)
+                    i_sol = np.array(res_3d['time'] <= time['1d_all'][-1])
+                    res[f][k]['1d'][i_sol] = interp(res_3d['time'][i_sol])
+                    res[f][k]['1d'][~i_sol] = 0
+                else:
+                    time_3d_last_1d = res_3d['time'] + (n_cycle_1d - 1) * res_3d['time'][-1]
+                    res[f][k]['1d'] = interp(time_3d_last_1d)
 
         return res, time
 
@@ -363,8 +373,9 @@ class SimVascular:
         subprocess.run([self.svsolver, run_file], cwd=run_folder)
 
     def run_solver_1d(self, run_folder, run_file='solver.inp'):
-        out = subprocess.run([self.onedsolver, run_file], cwd=run_folder, stdout=subprocess.PIPE)
-        return not out.stderr, out.stdout.decode('utf-8')
+        p = subprocess.Popen([self.onedsolver, run_file], cwd=run_folder, stdout=subprocess.PIPE,
+                             universal_newlines=True)
+        return p.communicate()
 
 
 class Post:
@@ -374,11 +385,9 @@ class Post:
         self.units = {'pressure': 'mmHg', 'flow': 'l/h'}
         self.styles = {'3d': '-', '1d': '--', '0d': ':'}
 
-        cgs2mmhg = 7.50062e-4
-        mlps2lph = 60 / 1000
-        self.convert = {'pressure': cgs2mmhg, 'flow': mlps2lph}
-
-        self.models = OrderedDict()
+        self.cgs2mmhg = 7.50062e-4
+        self.mlps2lph = 60 / 1000
+        self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph}
 
         # sets the plot order
         self.models = ['3d', '1d'] #'0d',

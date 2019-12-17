@@ -213,7 +213,7 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
     velocities = []
     for i in range(normals.GetOutput().GetPointData().GetNumberOfArrays()):
         res_name = normals.GetOutput().GetPointData().GetArrayName(i)
-        if res_name.split('_')[0] == 'velocity':
+        if 'velocity' in res_name:
             velocities.append(res_name)
 
     # recursively add calculators for normal velocities
