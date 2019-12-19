@@ -1,150 +1,147 @@
 #!/usr/bin/env python
-
-from vtk.util import numpy_support
+import vtk
+import os
+import pdb
 import numpy as np
-import os, glob, csv
-import scipy.spatial.distance
-
-import paraview.simple as pv 
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-import pdb, readline
 
-mode = 'volume'
-
-fpath_res_3d = '/home/pfaller/work/simvascular_demo/SVProject/Simulations/demojob/demojob-converted-results'
-fname_res_3d = 'all_results_*.vtu'
-fname_cent = '/home/pfaller/work/simvascular_demo/SVProject/1d/centerlines.vtp'
-
-fpath_res_1d = '/home/pfaller/work/simvascular_demo/SVProject/1d'
-fname_res_1d = 'demoGroup*_flow.dat'
-
-eps = 1e-3
-
-# todo: read from file
-nodes = [[-1.9641913175582886, -1.634276032447815, 12.921036720275879],
-         [0.6680281162261963, 3.1779656410217285, -7.453646183013916],
-         [-5.755790710449219, 5.635354518890381, -20.655569076538086],
-         [8.165690422058105, 5.082368850708008, -19.949831008911133]]
-nodes = np.array(nodes)
-caps = [0, 2, 3]
-normals =[[-0.449216, -0.382102, 0.807591],
-          [-0.303607, 0.336595, -0.891362],
-          [0.312343, 0.397111, -0.862986]]
-normals = np.array(normals)
-orientation = [-1, 1, 1]
+from get_bc_integrals import get_res_names
+from get_database import Database
+from vtk_functions import read_geo, threshold, calculator, cut_plane, connectivity, Integration
 
 
-# return list of result file paths
-def get_res(fpath, fname):
-    res_list = glob.glob(os.path.join(fpath, fname))
-    res_list.sort()
-    return res_list
+def sort_faces(res_faces):
+    """
+    Arrange results from surface integration in matrix
+    Args:
+        res_faces: dictionary where each key is a result at a certain time step
+
+    Returns:
+        dictionary with results as keys and matrix at all surfaces/time steps as values
+    """
+    # get time steps
+    times = []
+    for n in res_faces[list(res_faces)[0]].keys():
+        times.append(float(n.split('_')[1]))
+    times = np.unique(np.array(times))
+    # pdb.set_trace()
+
+    # sort data in arrays according to time steps
+    res_array = {'time': times}
+
+    for f, f_res in res_faces.items():
+        for res_name, res in f_res.items():
+            name, time = res_name.split('_')
+            if name not in res_array:
+                res_array[name] = {}
+            if f not in res_array[name]:
+                res_array[name][f] = np.zeros((times.shape[0], len(res)))
+            res_array[name][f][float(time) == times] = res
+
+    return res_array
 
 
-# normalize each row of a matrix
-def norm_row(x):
-    # length of each row
-    length = np.sum(np.abs(x)**2,axis=-1)**(1./2)
+def get_integral(inp, origin, normal):
+    """
+    Slice simulation at certain plane and integrate
+    Args:
+        inp: vtk InputConnection
+        origin: plane origin
+        normal: plane normal
 
-    # x is vector, length is scalar
-    if not length.shape:
-        return x / length
+    Returns:
+        Integration object
+    """
+    # cut geometry
+    cut = cut_plane(inp, origin, normal)
 
-    # x is matrix, length is vector
-    else:
-        return x / length[:, np.newaxis]
+    # extract region closest to centerline if there are several slices
+    con = connectivity(cut, origin)
+
+    # recursively add calculators for normal velocities
+    calc = con
+    for v in get_res_names(inp, 'velocity'):
+        fun = '(iHat*'+repr(normal[0])+'+jHat*'+repr(normal[1])+'+kHat*'+repr(normal[2])+').' + v
+        calc = calculator(calc, fun, [v], 'normal_' + v)
+
+    return Integration(calc)
 
 
-# slice simulation at certain location
-def get_slice(input, origin, normal):
-    slice = pv.Slice(Input=input)
-    slice.SliceType = 'Plane'
-    slice.SliceType.Origin = origin.tolist()
-    slice.SliceType.Normal = normal.tolist()
-    return slice
+def extract_results(fpath_1d, fpath_3d):
+    """
+    Extract 3d results at 1d model nodes (integrate over cross-section)
+    Args:
+        fpath_1d: path to 1d model
+        fpath_3d: path to 3d simulation results
+
+    Returns:
+        res: dictionary of results in all branches, in all segments for all result arrays
+    """
+    if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
+        return None
+
+    # fields to extract
+    res_fields = ['pressure', 'velocity']
+
+    # read 1d and 3d model
+    reader_1d, _, cell_1d = read_geo(fpath_1d)
+    reader_3d, _, _ = read_geo(fpath_3d)
+
+    # get all result array names
+    res_names = get_res_names(reader_3d, res_fields)
+
+    # group ids in model
+    groups = np.unique(v2n(cell_1d.GetArray('group')))
+
+    # initialize output array
+    res = {}
+    for g in groups:
+        res[g] = {}
+        for r in res_names:
+            res[g][r] = []
+
+    # create integrals
+    for g in groups:
+        print('  group ' + repr(g))
+
+        # threshold vessel branch
+        thresh = threshold(reader_1d, g, 'group')
+
+        # get point and normal on each 1d node
+        points = v2n(thresh.GetOutput().GetPoints().GetData())
+        normals = v2n(thresh.GetOutput().GetPointData().GetArray('normals'))
+
+        for i, (p, n) in enumerate(zip(points[1:], normals[1:])):
+            # create integration object
+            integral = get_integral(reader_3d, p, n)
+
+            # integrate all output arrays
+            for r in res_names:
+                res[g][r] += [integral.evaluate(r)]
+
+    return res
 
 
 def main():
-    result_list_1d = get_res(fpath_res_1d, fname_res_1d)
+    """
+    Loop all geometries
+    """
+    db = Database()
 
-    # read 1D simulation results
-    results_1d = []
+    for geo in ['0071_0001']:
+    # for geo in db.get_geometries():
+        print('Running geometry ' + geo)
 
-    # loop segments
-    for f_res in result_list_1d:
-        with open(f_res, 'r') as f:
-            reader = csv.reader(f, delimiter=' ')
+        fpath_1d = db.get_1d_geo(geo)
+        fpath_3d = db.get_volume(geo)
 
-            # loop nodes
-            results_1d_f = []
-            for line in reader:
-                results_1d_f.append([float(l) for l in line if l][1:])
-            results_1d.append(np.array(results_1d_f))
+        # extract 3d results integrated over cross-section
+        res = extract_results(fpath_1d, fpath_3d)
 
-    # get all time steps
-    result_list_3d = get_res(fpath_res_3d, fname_res_3d)
-
-    # read 3D simulation results
-    results_3d = pv.XMLUnstructuredGridReader(FileName=result_list_3d)
-
-    # number of segments
-    n_s = len(caps)
-
-    # create integrals
-    integrals = []
-    for i in range(n_s):
-        n = normals[i]
-        n /= np.linalg.norm(n)
-        p = nodes[caps[i]] - eps * n
-        n *= orientation[i]
-
-        # slice geometry
-        calc_input = get_slice(results_3d, p, n)
-
-        # project velocity on segment direction
-        calc = 'velocity.(iHat*'+repr(n[0])+'+jHat*'+repr(n[1])+'+kHat*'+repr(n[2])+')'
-        calculator = pv.Calculator(Input=calc_input)
-        calculator.Function = calc
-        calculator.ResultArrayName = 'velocity_normal'
-
-        # only select closest slice in case it cuts the geometry multiple times
-        connectivity = pv.Connectivity(Input=calculator)
-        connectivity.ExtractionMode = 'Extract Closest Point Region'
-        connectivity.ClosestPoint = p.tolist()
-
-        # integrate slice
-        integral = pv.IntegrateVariables(Input=connectivity)
-
-        integrals.append(integral)
-
-    # loop time steps
-    times = results_3d.TimestepValues
-    n_t = len(times)
-
-    # initialize results array
-    pressure = np.zeros((n_t, len(integrals)))
-    flow = np.zeros((n_t, len(integrals)))
-
-    for t in range(n_t):
-        for i in range(len(integrals)):
-            # get current time step
-            integrals[i].UpdatePipeline(times[t])
-
-            # evaluate integral
-            integral = pv.paraview.servermanager.Fetch(integrals[i])
-
-            norm = v2n(integral.GetCellData().GetArray('Area'))[0]
-            pres = v2n(integral.GetPointData().GetArray('pressure'))[0]
-            velo = v2n(integral.GetPointData().GetArray('velocity_normal'))[0]
-
-            # normalize by volume
-            pressure[t, i] = pres / norm
-            flow[t, i] = velo
-
-    results = {'flow': flow, 'pressure': pressure}
-    np.save(os.path.join(fpath_res_3d, 'results_avg'), results)
+        # save to file
+        np.save(db.get_3d_flow_path(geo), sort_faces(res))
 
 
 if __name__ == '__main__':
