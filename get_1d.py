@@ -9,8 +9,11 @@ import pdb
 import re
 import shutil
 import sys
+import argparse
 
 import numpy as np
+
+from common import input_args
 from get_database import Database, SimVascular, Post
 from get_sim import write_bc
 
@@ -52,12 +55,12 @@ def generate_1d(db, geo):
     n_cycle = 10
 
     # sub-segment size
-    seg_min_num = 4
-    seg_size = 9999
+    seg_min_num = 10
+    seg_size = 0.1
 
     # FEM size
-    min_num_elems = 3
-    element_size = 0.4
+    min_num_elems = 10
+    element_size = 0.01
 
     # mesh adaptive?
     seg_size_adaptive = False
@@ -81,13 +84,12 @@ def generate_1d(db, geo):
         return False, 'non-existing 3d geometry'
 
     if os.path.exists(db.get_bc_flow_path(geo)):
-        res_3d = db.read_results(geo, db.get_bc_flow_path(geo))
+        res_3d = db.read_results(db.get_bc_flow_path(geo))
     else:
         return False, 'no 3d results'
 
     # reference pressure (= initial pressure?)
-    pref = res_3d['pressure'][0, 0]
-    pdb.set_trace()
+    pref = res_3d['pressure'][-1, 0]
     # pref = 0
 
     # copy cap surfaces to simulation folder
@@ -131,10 +133,10 @@ def generate_1d(db, geo):
     np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, - inflow)).T)
 
     # set simulation time as end of 3d simulation
-    dt = 1e-3
-    num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
-    # num_dts = int(flow['time'][0] / dt + 1.0)
     save_data_freq = 1
+    dt = 1e-3
+    # num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
+    num_dts = int(flow['time'][0] / dt + 1.0)
 
     # if True:
     try:
@@ -191,17 +193,9 @@ def generate_1d(db, geo):
     return True, f_io.getvalue()
 
 
-def main(param):
-    # get model database
-    db = Database(param.study)
-
-    # choose geometries to evaluate
-    if param.geo:
-        geometries = [param.geo]
-    elif param.geo == 'select':
-        geometries = db.get_geometries_select()
-    else:
-        geometries = db.get_geometries()
+def main(db, geometries):
+    # simvascular object
+    sv = SimVascular()
 
     for geo in geometries:
         print('Running geometry ' + geo)
@@ -211,14 +205,14 @@ def main(param):
         #     continue
 
         # generate oneDSolver input file and check if successful
-        # success_gen, out_gen = generate_1d(db, geo)
+        success_gen, out_gen = generate_1d(db, geo)
         # with open(os.path.join(db.get_solve_dir_1d(geo), 'generate_1d.log'), 'w+') as f:
         #     f.write(out_gen)
 
-        success_gen = True
+        # success_gen = True
         if success_gen:
             # run oneDSolver
-            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
             # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
             #     f.write(out_solve)
 
@@ -231,7 +225,6 @@ def main(param):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Automatically create, run, and post-process 1d-simulations')
-    parser.add_argument('-g', '--geo', help='geometry')
-    parser.add_argument('-s', '--study', help='study name')
-    main(parser.parse_args())
+    descr = 'Automatically create, run, and post-process 1d-simulations'
+    d, g = input_args(descr)
+    main(d, g)

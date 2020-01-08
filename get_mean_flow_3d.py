@@ -3,10 +3,12 @@ import vtk
 import os
 import pdb
 import scipy
+import argparse
 import numpy as np
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
+from common import input_args
 from get_bc_integrals import get_res_names
 from get_database import Database
 from vtk_functions import read_geo, threshold, calculator, cut_plane, connectivity, Integration
@@ -158,21 +160,10 @@ def extract_results(fpath_1d, fpath_3d):
     return sort_faces(res, area, path)
 
 
-def main(param):
+def main(db, geometries):
     """
     Loop all geometries
     """
-    # get model database
-    db = Database(param.study)
-
-    # choose geometries to evaluate
-    if param.geo:
-        geometries = [param.geo]
-    elif param.geo == 'select':
-        geometries = db.get_geometries_select()
-    else:
-        geometries = db.get_geometries()
-
     for geo in geometries:
         print('Running geometry ' + geo)
 
@@ -194,7 +185,7 @@ def main(param):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Extract 3d-results at 1d-locations')
-    parser.add_argument('-g', '--geo', help='geometry')
-    parser.add_argument('-s', '--study', help='study name')
-    main(parser.parse_args())
+    descr = 'Extract 3d-results at 1d-locations'
+    d, g = input_args(descr)
+    main(d, g)
+

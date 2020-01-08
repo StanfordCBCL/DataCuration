@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationBbox
 
+from common import input_args
 from get_database import Database, Post
 
 
@@ -140,18 +141,7 @@ def plot_1d_3d_interior(db, geo, res, time):
     plt.close(fig)
 
 
-def main(param):
-    # get model database
-    db = Database(param.study)
-
-    # choose geometries to evaluate
-    if param.geo:
-        geometries = [param.geo]
-    elif param.geo == 'select':
-        geometries = db.get_geometries_select()
-    else:
-        geometries = db.get_geometries()
-
+def main(db, geometries):
     for geo in geometries:
         print('Comparing geometry ' + geo)
 
@@ -169,7 +159,6 @@ def main(param):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Plot comparison of xd-results')
-    parser.add_argument('-g', '--geo', help='geometry')
-    parser.add_argument('-s', '--study', help='study name')
-    main(parser.parse_args())
+    descr = 'Plot comparison of xd-results'
+    d, g = input_args(descr)
+    main(d, g)
