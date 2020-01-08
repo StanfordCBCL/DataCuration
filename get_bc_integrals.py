@@ -174,20 +174,22 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
     return res_faces
 
 
-def main():
+def main(param):
     """
     Loop all geometries in database
     """
-    # create object for data base entry to handle names/paths
-    db = Database()
+    # get model database
+    db = Database(param.study)
 
-    # for geo in db.get_geometries():
-    for geo in ['0006_0001']:
-    # for geo in ['0067_0001']:
-    # for geo in ['0074_0001']:
-    # for geo in ['0071_0001']:
-    # for geo in ['0110_0001']:
-    # for geo in ['0119_0001']:
+    # choose geometries to evaluate
+    if param.geo:
+        geometries = [param.geo]
+    elif param.geo == 'select':
+        geometries = db.get_geometries_select()
+    else:
+        geometries = db.get_geometries()
+
+    for geo in geometries:
         print('Processing ' + geo)
 
         # file paths
@@ -201,4 +203,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Extract 3d-results at 1d-locations')
+    parser.add_argument('-g', '--geo', help='geometry')
+    parser.add_argument('-s', '--study', help='study name')
+    main(parser.parse_args())
