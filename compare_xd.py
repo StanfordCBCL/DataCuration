@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 
 import numpy as np
-import sys
-import os
-import shutil
-import glob
+import argparse
 import pdb
 
 import matplotlib.pyplot as plt
@@ -38,13 +35,13 @@ def plot_1d_3d_all(db, geo, res, time):
             if i == len(post.fields) - 1:
                 ax[i, j].set_xlabel('Time [s]')
             if j == 0:
-                ax[i, j].set_ylabel(f + ' [' + post.units[f] + ']')
+                ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
 
             for c in caps.keys():
                 ax[i, j].plot(time[m + '_all'], res[f][c][m + '_all'] * post.convert[f])
 
     add_image(db, geo, fig)
-    fig.savefig(os.path.join(db.fpath_gen, '1d_3d_comparison', geo + '_1d_3d_all.png'))
+    fig.savefig(db.get_post_path(geo, 'all'))
     plt.close(fig)
 
 
@@ -65,7 +62,7 @@ def plot_1d_3d_cyclic(db, geo, res, time):
             if i == len(post.fields) - 1:
                 ax[i, j].set_xlabel('Time [s]')
             if j == 0:
-                ax[i, j].set_ylabel(f + ' [' + post.units[f] + ']')
+                ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
 
             res_split = np.split(res[f][c]['1d_all'][:time['step_cycle'] * time['n_cycle']], time['n_cycle'])
             for r in res_split:
@@ -74,7 +71,7 @@ def plot_1d_3d_cyclic(db, geo, res, time):
             ax[i, j].plot(time['3d'], res[f][c]['3d'] * post.convert[f], post.styles['3d'])
 
     add_image(db, geo, fig)
-    fig.savefig(os.path.join(db.fpath_gen, '1d_3d_comparison', geo + '_1d_3d_cyclic.png'))
+    fig.savefig(db.get_post_path(geo, 'cyclic'))
     plt.close(fig)
 
 
@@ -95,7 +92,7 @@ def plot_1d_3d_caps(db, geo, res, time):
             if i == len(post.fields) - 1:
                 ax[i, j].set_xlabel('Time [s]')
             if j == 0:
-                ax[i, j].set_ylabel(f + ' [' + post.units[f] + ']')
+                ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
 
             lg = []
             for m in post.models:
@@ -105,16 +102,57 @@ def plot_1d_3d_caps(db, geo, res, time):
             ax[i, j].legend(lg)
 
     add_image(db, geo, fig)
-    fig.savefig(os.path.join(db.fpath_gen, '1d_3d_comparison', geo + '_1d_3d_caps.png'))
+    fig.savefig(db.get_post_path(geo, 'caps'))
     plt.close(fig)
 
 
-def main():
-    # get model database
-    db = Database()
+def plot_1d_3d_interior(db, geo, res, time):
+    # get post-processing constants
+    post = Post()
 
-    # for geo in db.get_geometries():
-    for geo in ['0071_0001']:
+    # get 1d/3d map
+    caps = db.get_xd_map(geo)
+
+    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(50, 10), dpi=300, sharex=True, sharey='row')
+
+    # pick time step
+    t_max = np.argmax(res['flow']['inflow']['3d'])
+
+    for i, f in enumerate(post.fields):
+        for j, c in enumerate(caps.keys()):
+            ax[i, j].set_title(c)
+            ax[i, j].grid(True)
+
+            if i == len(post.fields) - 1:
+                ax[i, j].set_xlabel('Vessel path [1]')
+            if j == 0:
+                ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
+
+            lg = []
+            for m in post.models:
+                ax[i, j].plot(res['path'][c], res[f][c][m + '_int'][t_max] * post.convert[f], post.styles[m] + 'o')
+                lg.append(m)
+
+            ax[i, j].legend(lg)
+
+    add_image(db, geo, fig)
+    fig.savefig(db.get_post_path(geo, 'interior'))
+    plt.close(fig)
+
+
+def main(param):
+    # get model database
+    db = Database(param.study)
+
+    # choose geometries to evaluate
+    if param.geo:
+        geometries = [param.geo]
+    elif param.geo == 'select':
+        geometries = db.get_geometries_select()
+    else:
+        geometries = db.get_geometries()
+
+    for geo in geometries:
         print('Comparing geometry ' + geo)
 
         # read results
@@ -126,8 +164,12 @@ def main():
         print('plotting')
         plot_1d_3d_all(db, geo, res, time)
         plot_1d_3d_caps(db, geo, res, time)
-        plot_1d_3d_cyclic(db, geo, res, time)
+        # plot_1d_3d_cyclic(db, geo, res, time)
+        plot_1d_3d_interior(db, geo, res, time)
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Plot comparison of xd-results')
+    parser.add_argument('-g', '--geo', help='geometry')
+    parser.add_argument('-s', '--study', help='study name')
+    main(parser.parse_args())

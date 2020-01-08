@@ -2,45 +2,52 @@
 import vtk
 import os
 import pdb
+import scipy
 import numpy as np
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
-
 
 from get_bc_integrals import get_res_names
 from get_database import Database
 from vtk_functions import read_geo, threshold, calculator, cut_plane, connectivity, Integration
 
 
-def sort_faces(res_faces):
+def sort_faces(res_faces, area, path):
     """
     Arrange results from surface integration in matrix
     Args:
-        res_faces: dictionary where each key is a result at a certain time step
+        res_faces: dictionary with key: segment id, value: result at a certain time step
+        area: cross-sectional area of each segment
+        path: one-dimensional path coordinate
 
     Returns:
         dictionary with results as keys and matrix at all surfaces/time steps as values
     """
     # get time steps
-    times = []
-    for n in res_faces[list(res_faces)[0]].keys():
-        times.append(float(n.split('_')[1]))
-    times = np.unique(np.array(times))
-    # pdb.set_trace()
+    times = np.unique([float(k.split('_')[1]) for v in res_faces.values() for k in v.keys()])
 
-    # sort data in arrays according to time steps
-    res_array = {'time': times}
+    # solution fields
+    fields = np.unique([k.split('_')[0] for v in res_faces.values() for k in v.keys()])
+    fields = np.append(fields, 'area')
 
-    for f, f_res in res_faces.items():
-        for res_name, res in f_res.items():
-            name, time = res_name.split('_')
-            if name not in res_array:
-                res_array[name] = {}
-            if f not in res_array[name]:
-                res_array[name][f] = np.zeros((times.shape[0], len(res)))
-            res_array[name][f][float(time) == times] = res
+    # initialize
+    res = {'time': times, 'path': np.zeros(len(res_faces))}
+    for f in fields:
+        res[f] = np.zeros((times.shape[0], len(res_faces)))
 
-    return res_array
+    for k, v in res_faces.items():
+        # constant area for all time steps
+        res['area'][:, k] = area[k]
+
+        # path coordinate
+        res['path'][k] = path[k]
+
+        # sort time steps
+        for r_name, r in v.items():
+            name, time = r_name.split('_')
+            res[name][float(time) == times, k] = r
+
+    return res
 
 
 def get_integral(inp, origin, normal):
@@ -69,6 +76,27 @@ def get_integral(inp, origin, normal):
     return Integration(calc)
 
 
+def norm_row(x):
+    """
+    Normalize each row of a matrix
+    Args:
+        x: vector or matrix
+
+    Returns:
+        normalized vector/matrix
+    """
+    # length of each row
+    length = np.sum(np.abs(x)**2, axis=-1)**(1./2)
+
+    # x is vector, length is scalar
+    if not length.shape:
+        return x / length
+
+    # x is matrix, length is vector
+    else:
+        return x / length[:, np.newaxis]
+
+
 def extract_results(fpath_1d, fpath_3d):
     """
     Extract 3d results at 1d model nodes (integrate over cross-section)
@@ -86,63 +114,87 @@ def extract_results(fpath_1d, fpath_3d):
     res_fields = ['pressure', 'velocity']
 
     # read 1d and 3d model
-    reader_1d, _, cell_1d = read_geo(fpath_1d)
+    reader_1d, _, _ = read_geo(fpath_1d)
     reader_3d, _, _ = read_geo(fpath_3d)
 
     # get all result array names
     res_names = get_res_names(reader_3d, res_fields)
 
-    # group ids in model
-    groups = np.unique(v2n(cell_1d.GetArray('group')))
+    # number of points in model
+    n_point = reader_1d.GetOutput().GetNumberOfPoints()
+    n_cell = reader_1d.GetOutput().GetNumberOfCells()
+    assert n_point == n_cell + 1, 'geometry inconsistent'
 
-    # initialize output array
+    points = v2n(reader_1d.GetOutput().GetPoints().GetData())
+    normals = v2n(reader_1d.GetOutput().GetPointData().GetArray('normals'))
+    path_1d = v2n(reader_1d.GetOutput().GetPointData().GetArray('path'))
+    seg_id = v2n(reader_1d.GetOutput().GetCellData().GetArray('seg_id'))
+
+    # integrate results on each point
     res = {}
-    for g in groups:
-        res[g] = {}
+    area = {}
+    path = {}
+    for i in range(n_cell):
+        # id of vessel segment
+        s = seg_id[i]
+
+        # id of down-stream node of cell
+        p = reader_1d.GetOutput().GetCell(i).GetPointId(1)
+
+        # create integration object (slice geometry at point/normal)
+        integral = get_integral(reader_3d, points[p], normals[p])
+
+        # integrate all output arrays
+        res[s] = {}
         for r in res_names:
-            res[g][r] = []
+            res[s][r] = integral.evaluate(r)
 
-    # create integrals
-    for g in groups:
-        print('  group ' + repr(g))
+        # store cross-sectional area
+        area[s] = integral.area()
 
-        # threshold vessel branch
-        thresh = threshold(reader_1d, g, 'group')
+        # store path coordinate
+        path[s] = path_1d[p]
 
-        # get point and normal on each 1d node
-        points = v2n(thresh.GetOutput().GetPoints().GetData())
-        normals = v2n(thresh.GetOutput().GetPointData().GetArray('normals'))
-
-        for i, (p, n) in enumerate(zip(points[1:], normals[1:])):
-            # create integration object
-            integral = get_integral(reader_3d, p, n)
-
-            # integrate all output arrays
-            for r in res_names:
-                res[g][r] += [integral.evaluate(r)]
-
-    return res
+    return sort_faces(res, area, path)
 
 
-def main():
+def main(param):
     """
     Loop all geometries
     """
-    db = Database()
+    # get model database
+    db = Database(param.study)
 
-    for geo in ['0071_0001']:
-    # for geo in db.get_geometries():
+    # choose geometries to evaluate
+    if param.geo:
+        geometries = [param.geo]
+    elif param.geo == 'select':
+        geometries = db.get_geometries_select()
+    else:
+        geometries = db.get_geometries()
+
+    for geo in geometries:
         print('Running geometry ' + geo)
 
         fpath_1d = db.get_1d_geo(geo)
         fpath_3d = db.get_volume(geo)
 
-        # extract 3d results integrated over cross-section
-        res = extract_results(fpath_1d, fpath_3d)
+        if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
+            continue
 
-        # save to file
-        np.save(db.get_3d_flow_path(geo), sort_faces(res))
+        # extract 3d results integrated over cross-section
+        try:
+            res = extract_results(fpath_1d, fpath_3d)
+
+            # save to file
+            if res is not None:
+                np.save(db.get_3d_flow_path(geo), res)
+        except:
+            continue
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Extract 3d-results at 1d-locations')
+    parser.add_argument('-g', '--geo', help='geometry')
+    parser.add_argument('-s', '--study', help='study name')
+    main(parser.parse_args())

@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 
-import numpy as np
-import sys
-import os
-import shutil
-import glob
+import contextlib
 import csv
-import re
+import glob
+import io
+import os
 import pdb
-import contextlib, io
+import re
+import shutil
+import sys
 
+import numpy as np
 from get_database import Database, SimVascular, Post
 from get_sim import write_bc
 
@@ -20,7 +21,7 @@ import sv_1d_simulation as oned
 
 def read_results_1d(fpath_1d, geo):
     # requested output fields
-    fields_res_1d = ['flow', 'pressure']
+    fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
 
     # read 1D simulation results
     results_1d = {}
@@ -51,15 +52,15 @@ def generate_1d(db, geo):
     n_cycle = 10
 
     # sub-segment size
-    seg_min_num = 1
-    seg_size = 0.1
+    seg_min_num = 4
+    seg_size = 9999
 
     # FEM size
-    min_num_elems = 1
-    element_size = 0.05
+    min_num_elems = 3
+    element_size = 0.4
 
     # mesh adaptive?
-    seg_size_adaptive = True
+    seg_size_adaptive = False
 
     # set simulation paths and create folders
     fpath_1d = db.get_solve_dir_1d(geo)
@@ -86,6 +87,8 @@ def generate_1d(db, geo):
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][0, 0]
+    pdb.set_trace()
+    # pref = 0
 
     # copy cap surfaces to simulation folder
     for f in db.get_surfaces(geo, 'caps'):
@@ -130,6 +133,7 @@ def generate_1d(db, geo):
     # set simulation time as end of 3d simulation
     dt = 1e-3
     num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
+    # num_dts = int(flow['time'][0] / dt + 1.0)
     save_data_freq = 1
 
     # if True:
@@ -176,7 +180,7 @@ def generate_1d(db, geo):
                  wall_properties_output_file=None,
                  write_mesh_file=True,
                  write_solver_file=True)
-    except (KeyError, ZeroDivisionError, RuntimeError) as e:
+    except (IndexError, KeyError, ZeroDivisionError, RuntimeError) as e:
         # todo KeyError: log geometries with multiple inlets
         # todo ZeroDivisionError:
         #   0070_0001: Cannot read cell data array "GlobalElementID" from PointData in piece 0.  The data array in the element may be too short.
@@ -187,40 +191,47 @@ def generate_1d(db, geo):
     return True, f_io.getvalue()
 
 
-def main():
-    db = Database()
-    sv = SimVascular()
+def main(param):
+    # get model database
+    db = Database(param.study)
 
-    # for geo in ['0006_0001']:
-    # for geo in ['0071_0001']:
-    # for geo in ['0091_0001']:
-    for geo in db.get_geometries():
+    # choose geometries to evaluate
+    if param.geo:
+        geometries = [param.geo]
+    elif param.geo == 'select':
+        geometries = db.get_geometries_select()
+    else:
+        geometries = db.get_geometries()
+
+    for geo in geometries:
         print('Running geometry ' + geo)
 
-        # output path for 1d results
-        fpath_out = os.path.join(db.fpath_gen, '1d_flow', geo)
-
-        # if os.path.exists(fpath_out + '.npy'):
+        # if os.path.exists(db.get_1d_flow_path(geo)):
         #     print('  skipping (1d solution alread exists)')
         #     continue
 
         # generate oneDSolver input file and check if successful
-        success_gen, out_gen = generate_1d(db, geo)
-        with open(os.path.join(db.get_solve_dir_1d(geo), 'generate_1d.log'), 'w+') as f:
-            f.write(out_gen)
+        # success_gen, out_gen = generate_1d(db, geo)
+        # with open(os.path.join(db.get_solve_dir_1d(geo), 'generate_1d.log'), 'w+') as f:
+        #     f.write(out_gen)
 
+        success_gen = True
         if success_gen:
             # run oneDSolver
-            out_solve, success_solve = sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
-            with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
-                f.write(out_solve)
+            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
+            #     f.write(out_solve)
 
             # extract results
             results_1d = read_results_1d(db.get_solve_dir_1d(geo), geo)
-            np.save(fpath_out, results_1d)
+            if results_1d['flow']:
+                np.save(db.get_1d_flow_path(geo), results_1d)
         else:
-            print('  skipping (1d model creation failed)')
+            print('  skipping (1d model creation failed)\n' + out_gen)
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Automatically create, run, and post-process 1d-simulations')
+    parser.add_argument('-g', '--geo', help='geometry')
+    parser.add_argument('-s', '--study', help='study name')
+    main(parser.parse_args())

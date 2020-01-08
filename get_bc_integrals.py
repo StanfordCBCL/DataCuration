@@ -5,45 +5,12 @@ import vtk
 import pdb
 
 import numpy as np
+
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_database import Database
-
-
-def read_geo(fname):
-    """
-    Read geometry from file, chose corresponding vtk reader
-    Args:
-        fname: vtp surface or vtu volume mesh
-
-    Returns:
-        vtk reader, point data, cell data
-    """
-    _, ext = os.path.splitext(fname)
-    if ext == '.vtp':
-        reader = vtk.vtkXMLPolyDataReader()
-    elif ext == '.vtu':
-        reader = vtk.vtkXMLUnstructuredGridReader()
-    else:
-        raise ValueError('File extension ' + ext + ' unknown.')
-    reader.SetFileName(fname)
-    reader.Update()
-    return reader, reader.GetOutput().GetPointData(), reader.GetOutput().GetCellData()
-
-
-def write_geo(fname, reader):
-    """
-    Write geometry to file
-    Args:
-        fname: file name
-        reader: vtkXMLPolyData
-    """
-    writer = vtk.vtkXMLPolyDataWriter()
-    writer.SetFileName(fname)
-    writer.SetInputConnection(reader.GetOutputPort())
-    writer.Update()
-    writer.Write()
+from vtk_functions import Integration, read_geo, write_geo, threshold, calculator, cut_plane
 
 
 def transfer_solution(node_surf, node_vol, res_fields):
@@ -74,11 +41,12 @@ def transfer_solution(node_surf, node_vol, res_fields):
             node_surf.AddArray(out_array)
 
 
-def sort_faces(res_faces):
+def sort_faces(res_faces, area):
     """
     Arrange results from surface integration in matrix
     Args:
-        res_faces: dictionary where each key is a result at a certain time step
+        res_faces: dictionary with key: cap id, value: result at a certain time step
+        area: cross-sectional area of each cap
 
     Returns:
         dictionary with results as keys and matrix at all surfaces/time steps as values
@@ -91,106 +59,37 @@ def sort_faces(res_faces):
 
     # sort data in arrays according to time steps
     res_array = {'time': times}
+    dim = (times.shape[0], max(list(res_faces.keys())))
 
     for f, f_res in res_faces.items():
         for res_name, res in f_res.items():
             name, time = res_name.split('_')
             if name not in res_array:
-                res_array[name] = np.zeros((times.shape[0], max(list(res_faces.keys()))))
+                res_array[name] = np.zeros(dim)
             res_array[name][float(time) == times, f - 1] = res
+
+    # repeat area for all time steps to match format
+    res_array['area'] = np.zeros(dim)
+    for f, f_res in area.items():
+        res_array['area'][:, f - 1] = f_res
 
     return res_array
 
 
-class Integration:
-    """
-    Class to perform integration on surface caps
-    """
+def get_res_names(inp, res_fields):
+    # result name list
+    res = []
 
-    def __init__(self, int_input):
-        # integrate over selected face
-        self.integrator = vtk.vtkIntegrateAttributes()
-        self.integrator.SetInputData(int_input)
-        self.integrator.Update()
+    # get integral for each result
+    for i in range(inp.GetOutput().GetPointData().GetNumberOfArrays()):
+        res_name = inp.GetOutput().GetPointData().GetArrayName(i)
+        field = res_name.split('_')[0]
 
-    def evaluate(self, field, res_name):
-        """
-        Evaluate integral.
-        Distinguishes between scalar integration (e.g. pressure) and normal projection (velocity)
-        Optionally divides integral by integrated area
-        Args:
-            field: pressure, velocity, ...
-            res_name: name of array
+        # check if field should be added to output
+        if field in res_fields:
+            res += [res_name]
 
-        Returns:
-            Scalar integral
-        """
-        int_out = self.integrator.GetOutput()
-
-        if field == 'velocity':
-            int_name = 'normal_' + res_name
-        else:
-            int_name = res_name
-
-        # evaluate integral
-        integral = v2n(int_out.GetPointData().GetArray(int_name))
-
-        # evaluate surface area
-        area = v2n(int_out.GetCellData().GetArray('Area'))[0]
-
-        # choose if integral should be divided by area
-        if field == 'velocity':
-            out = integral
-        else:
-            out = integral / area
-
-        return out
-
-
-def threshold(inp, t):
-    """
-    Threshold according to BC_FaceID to extract caps
-    Args:
-        inp: InputConnection
-        t: BC_FaceID
-
-    Returns:
-        reader, point data
-    """
-    thresh = vtk.vtkThreshold()
-    thresh.SetInputConnection(inp.GetOutputPort())
-    thresh.SetInputArrayToProcess(0, 0, 0, 1, 'BC_FaceID')
-    thresh.ThresholdBetween(t, t)
-    thresh.Update()
-    thresh_node = thresh.GetOutput().GetPointData()
-    return thresh, thresh_node
-
-
-def add_calculator(inp, velocities):
-    """
-    Recursive function to add projection of time step velocities onto cap normals
-    Args:
-        inp: InputConnection
-        velocities: list of velocity array names at time steps, e.g. velocity_0.7500
-
-    Returns:
-        Final calculator object
-    """
-    res_name = velocities[-1]
-    calc = vtk.vtkArrayCalculator()
-    calc.AddVectorArrayName('Normals')
-    calc.AddVectorArrayName(res_name)
-    calc.SetInputData(inp.GetOutput())
-    calc.SetAttributeModeToUsePointData()
-    calc.SetFunction('Normals.' + res_name)
-    calc.SetResultArrayName('normal_' + res_name)
-    calc.Update()
-
-    velocities.pop()
-    if not velocities:
-        return calc
-    else:
-        return add_calculator(calc, velocities)
+    return res
 
 
 def integrate_surfaces(reader_surf, cell_surf, res_fields):
@@ -209,53 +108,46 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
     normals.SetInputData(reader_surf.GetOutput())
     normals.Update()
 
-    # get names of all velocity results
-    velocities = []
-    for i in range(normals.GetOutput().GetPointData().GetNumberOfArrays()):
-        res_name = normals.GetOutput().GetPointData().GetArrayName(i)
-        if 'velocity' in res_name:
-            velocities.append(res_name)
-
     # recursively add calculators for normal velocities
-    calc = add_calculator(normals, velocities)
+    calc = normals
+    for v in get_res_names(reader_surf, 'velocity'):
+        calc = calculator(calc, 'Normals.' + v, ['Normals', v], 'normal_' + v)
+
+    # get all output array names
+    res_names = get_res_names(reader_surf, res_fields)
 
     # boundary faces
     faces = np.unique(v2n(cell_surf.GetArray('BC_FaceID')).astype(int))
-    res_faces = {}
+    res = {}
+    area = {}
 
     # loop boundary faces
     for f in faces:
-        # skip face 0
+        # skip face 0 (vessel wall)
         if f:
-            # initialize result dic for face
-            res_faces[f] = {}
-
             # threshhold face
-            thresh, thresh_node = threshold(calc, f)
+            thresh = threshold(calc, f, 'BC_FaceID')
 
             # integrate over selected face (separately for pressure and velocity)
-            integrator = Integration(thresh.GetOutput())
+            integrator = Integration(thresh)
 
-            # get integral for each result
-            for i in range(thresh_node.GetNumberOfArrays()):
-                res_name = thresh_node.GetArrayName(i)
-                field = res_name.split('_')[0]
+            # perform integration
+            res[f] = {}
+            for r in res_names:
+                res[f][r] = integrator.evaluate(r)
 
-                # check if field should be added to output
-                if field in res_fields:
-                    # perform integration
-                    out = integrator.evaluate(field, res_name)
-                    res_faces[f][res_name] = out
+            # store cross-sectional area
+            area[f] = integrator.area()
 
-    return sort_faces(res_faces)
+    return sort_faces(res, area)
 
 
-def integrate_bcs(db, geo, res_fields, debug=False, debug_out=''):
+def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
     """
     Perform all steps necessary to get results averaged on caps
     Args:
-        db: Database object
-        geo: geometry name
+        fpath_surf: surface geometry file
+        fpath_vol: volume geometry file
         res_fields: results to extract
         debug: bool if debug geometry should be written
         debug_out: path for debug geometry
@@ -263,9 +155,6 @@ def integrate_bcs(db, geo, res_fields, debug=False, debug_out=''):
     Returns:
         dictionary with result fields as keys and matrices with all faces and time steps as matrices
     """
-    fpath_surf = db.get_surfaces(geo, 'all_exterior')
-    fpath_vol = db.get_volume(geo)
-
     if not os.path.exists(fpath_surf) or not os.path.exists(fpath_vol):
         return None
 
@@ -292,10 +181,20 @@ def main():
     # create object for data base entry to handle names/paths
     db = Database()
 
-    for geo in db.get_geometries():
+    # for geo in db.get_geometries():
+    for geo in ['0006_0001']:
+    # for geo in ['0067_0001']:
+    # for geo in ['0074_0001']:
+    # for geo in ['0071_0001']:
+    # for geo in ['0110_0001']:
+    # for geo in ['0119_0001']:
         print('Processing ' + geo)
 
-        bc_flow = integrate_bcs(db, geo, ['pressure', 'velocity'])
+        # file paths
+        fpath_surf = db.get_surfaces(geo, 'all_exterior')
+        fpath_vol = db.get_volume(geo)
+
+        bc_flow = integrate_bcs(fpath_surf, fpath_vol, ['pressure', 'velocity'])
 
         if bc_flow is not None:
             np.save(db.get_bc_flow_path(geo), bc_flow)
