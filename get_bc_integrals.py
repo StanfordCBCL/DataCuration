@@ -10,6 +10,7 @@ import numpy as np
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
+from common import input_args
 from get_database import Database
 from vtk_functions import Integration, read_geo, write_geo, threshold, calculator, cut_plane
 
@@ -175,21 +176,10 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
     return res_faces
 
 
-def main(param):
+def main(db, geometries):
     """
     Loop all geometries in database
     """
-    # get model database
-    db = Database(param.study)
-
-    # choose geometries to evaluate
-    if param.geo:
-        geometries = [param.geo]
-    elif param.geo == 'select':
-        geometries = db.get_geometries_select()
-    else:
-        geometries = db.get_geometries()
-
     for geo in geometries:
         print('Processing ' + geo)
 
@@ -204,7 +194,6 @@ def main(param):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Extract 3d-results at 1d-locations')
-    parser.add_argument('-g', '--geo', help='geometry')
-    parser.add_argument('-s', '--study', help='study name')
-    main(parser.parse_args())
+    descr = 'Plot comparison of xd-results'
+    d, g, _ = input_args(descr)
+    main(d, g)

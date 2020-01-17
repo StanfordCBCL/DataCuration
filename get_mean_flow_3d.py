@@ -173,6 +173,9 @@ def main(db, geometries):
         if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
             continue
 
+        if os.path.exists(db.get_3d_flow_path(geo)):
+            continue
+
         # extract 3d results integrated over cross-section
         try:
             res = extract_results(fpath_1d, fpath_3d)
@@ -186,6 +189,6 @@ def main(db, geometries):
 
 if __name__ == '__main__':
     descr = 'Extract 3d-results at 1d-locations'
-    d, g = input_args(descr)
+    d, g, _ = input_args(descr)
     main(d, g)
 
