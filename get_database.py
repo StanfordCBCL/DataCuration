@@ -37,7 +37,7 @@ class Database:
         self.fpath_png = '/home/pfaller/work/osmsc/data_png'
 
         # folder where simulation is run
-        self.fpath_solve = '/home/pfaller/work/osmsc/simulation'
+        self.fpath_solve = os.path.join(self.fpath_gen, 'simulation')
         if self.study:
             self.fpath_solve += '_' + self.study
 
@@ -100,17 +100,22 @@ class Database:
         geometries.sort()
         return geometries
 
-    def get_geometries_select(self):
-        return ['0071_0001']
+    def get_geometries_select(self, name):
+        if name == 'stenosis':
+            geometries = ['0071_0001']
+        elif name == 'fix_surf_id':
+            geometries = ['0140_2001', '0144_1001', '0147_1001', '0160_6001', '0161_0001', '0162_3001', '0163_0001']
+        else:
+            raise Exception('Unknown selection ' + name)
+        return geometries
 
     def get_bcs(self, geo):
-        if geo == '0119_0001':
-            geo = '0119_0002'
-        if geo == '0144_1001':
-            geo = '0144_1002'
-        tcl, tcl_bc = self.get_tcl_paths(geo)
-        if os.path.exists(tcl) and os.path.exists(tcl_bc):
-            return get_bcs(tcl, tcl_bc)
+        # try two different offsets of tcl name vs geo name
+        # todo: find out why there are several variants
+        for o in [-1, 0, -1001]:
+            tcl, tcl_bc = self.get_tcl_paths(geo, o)
+            if os.path.exists(tcl) and os.path.exists(tcl_bc):
+                return get_bcs(tcl, tcl_bc)
         else:
             return None, None
 
@@ -120,8 +125,9 @@ class Database:
     def get_flow(self, geo):
         return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
 
-    def get_tcl_paths(self, geo):
-        geo_bc = geo.split('_')[0] + '_' + str(int(geo.split('_')[1]) - 1).zfill(4)
+    def get_tcl_paths(self, geo, offset):
+        ids = geo.split('_')
+        geo_bc = ids[0] + '_' + str(int(ids[1]) + offset).zfill(4)
         return os.path.join(self.fpath_bc, geo_bc + '.tcl'), os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
 
     def get_surface_dir(self, geo):
@@ -133,27 +139,38 @@ class Database:
     def get_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
 
-    def gen_dir(self, name, geo, ext='npy'):
+    def gen_dir(self, name):
         if self.study:
             name += '_' + self.study
         fdir = os.path.join(self.fpath_gen, name)
         os.makedirs(fdir, exist_ok=True)
+        return fdir
+
+    def gen_file(self, name, geo, ext='npy'):
+        fdir = self.gen_dir(name)
         return os.path.join(fdir, geo + '.' + ext)
 
     def get_0d_flow_path(self, geo):
-        return self.gen_dir('0d_flow', geo)
+        return self.gen_file('0d_flow', geo)
 
     def get_1d_flow_path(self, geo):
-        return self.gen_dir('1d_flow', geo)
+        return self.gen_file('1d_flow', geo)
 
     def get_3d_flow_path(self, geo):
-        return self.gen_dir('3d_flow', geo)
+        # return self.gen_file('3d_flow', geo)
+        return os.path.join(self.fpath_gen, '3d_flow_geo_centerline', geo + '.npy')
 
     def get_post_path(self, geo, name):
-        return self.gen_dir('1d_3d_comparison', geo + '_' + name, 'png')
+        return self.gen_file('1d_3d_comparison', geo + '_' + name, 'png')
 
     def get_groupid_path(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), 'outletface_groupid.dat')
+
+    def get_centerline_path(self, geo):
+        return os.path.join(self.fpath_gen, 'centerline', geo + '.vtp')
+
+    def get_statistics_dir(self):
+        return self.gen_dir('statistics')
 
     def get_solve_dir(self, geo):
         fsolve = os.path.join(self.fpath_solve, geo)
@@ -175,8 +192,32 @@ class Database:
         os.makedirs(fsolve, exist_ok=True)
         return fsolve
 
+    def get_dict(self, dict_file):
+        if os.path.exists(dict_file):
+            return np.load(dict_file, allow_pickle=True).item()
+        else:
+            return {}
+
+    def add_dict(self, dict_file, geo, add):
+        dict_db = self.get_dict(dict_file)
+        dict_db[geo] = add
+        np.save(dict_file, dict_db)
+
+    def get_log_file_1d(self):
+        return os.path.join(self.fpath_solve, 'log_1d.npy')
+
+    def add_log_file_1d(self, geo, log):
+        self.add_dict(self.get_log_file_1d(), geo, log)
+
+    def add_1d_3d_comparison(self, geo, err):
+        err_file = os.path.join(os.path.dirname(self.get_post_path(geo, '')), '1d_3d_comparison.npy')
+        self.add_dict(err_file, geo, err)
+
     def get_1d_geo(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp')
+
+    def get_1d_params(self, geo):
+        return np.load(os.path.join(self.get_solve_dir_1d(geo), 'parameters.npy'), allow_pickle=True).item()
 
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
@@ -188,6 +229,24 @@ class Database:
             if c in k.lower() and k in keys_left:
                 keys_ordered.append(k)
                 keys_left.remove(k)
+
+    def read_centerline(self, fpath):
+        reader_1d, nodes_1d, cells_1d = read_geo(fpath)
+        group = v2n(cells_1d.GetArray('group'))
+        seg_id = v2n(cells_1d.GetArray('seg_id'))
+        point_id = v2n(nodes_1d.GetArray('point_id'))
+        path = v2n(nodes_1d.GetArray('path'))
+
+        grp = np.unique(group)
+        grp_nodes = {}
+        for g in grp:
+            points_group = []
+            for c in np.where(group == g)[0]:
+                for i in range(2):
+                    points_group += [reader_1d.GetOutput().GetCell(c).GetPointId(i)]
+            grp_nodes[g] = np.unique(points_group)
+
+        return group, seg_id, grp_nodes, path
 
     def get_xd_map(self, geo):
         # add inlet GroupId
@@ -206,13 +265,23 @@ class Database:
             caps[k]['BC_FaceID'] = int(bcs['preid'][k])
 
         # add inlet/oulet SegIds
-        reader_1d, nodes_1d, cells_1d = read_geo(os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp'))
-        group = v2n(cells_1d.GetArray('group'))
-        seg_id = v2n(cells_1d.GetArray('seg_id'))
-
+        group, seg_id, grp_nodes, path = self.read_centerline(os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp'))
         for k in caps.keys():
-            g = group[seg_id == caps[k]['GroupId']]
-            caps[k]['SegId'] = seg_id[group == g]
+            g = group[seg_id == caps[k]['GroupId']][0]
+            # caps[k]['SegId'] = seg_id[group == g]
+            caps[k]['SegId'] = grp_nodes[g]
+            caps[k]['BranchId'] = g
+            caps[k]['path_1d'] = path[caps[k]['SegId']]
+            if not k == 'inflow':
+                caps[k]['path_1d'][0] = 0
+
+        group, seg_id, grp_nodes, path = self.read_centerline(self.get_centerline_path(geo))
+        for k in caps.keys():
+            # caps[k]['SegId_cent'] = seg_id[group == caps[k]['BranchId']]
+            caps[k]['SegId_cent'] = grp_nodes[caps[k]['BranchId']]
+            caps[k]['path_3d'] = path[caps[k]['SegId_cent']]
+            if not k == 'inflow':
+                caps[k]['path_3d'][0] = 0
 
         # nicely ordered cap names for output
         keys_left = sorted(caps.keys())
@@ -253,14 +322,24 @@ class Database:
             surfaces = []
         return surfaces
 
+    def get_surface_names(self, geo, surf='all'):
+        surfaces = self.get_surfaces(geo, surf)
+        surfaces = [os.path.splitext(os.path.basename(s))[0] for s in surfaces]
+        surfaces.sort()
+        return surfaces
+
     def get_volume(self, geo):
         return os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
 
     def get_outlet_names(self, geo):
-        outlets = self.get_surfaces(geo, 'outlets')
-        outlets = [os.path.splitext(os.path.basename(s))[0] for s in outlets]
-        outlets.sort()
-        return outlets
+        return self.get_surface_names(geo, 'outlets')
+
+    def count_inlets(self, geo):
+        n_inlet = 0
+        for s in self.get_surface_names(geo):
+            if 'inflow' in s:
+                n_inlet += 1
+        return n_inlet
 
     def copy_files(self, geo):
         # define paths
@@ -285,11 +364,11 @@ class Database:
         if os.path.exists(fpath):
             res = np.load(fpath, allow_pickle=True).item()
         else:
-            print('no results')
+            print('no results in ' + fpath)
             return None
 
         if 'pressure' not in res or len(res['pressure']) == 0:
-            print('results empty')
+            print('results empty in ' + fpath)
             return None
 
         return res
@@ -364,38 +443,58 @@ class Database:
 
                 # assemble simulation results
                 res[f][k] = {}
+                res['path'][k] = {}
 
                 if res_1d is not None:
+                    res['path'][k]['1d'] = np.array([0])
+
+                    # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
                     res[f][k]['1d_all'] = res_1d[f][v['GroupId']][i_1d]
 
                     # interpolate 1d results to 3d time steps of last cycle
                     interp = scipy.interpolate.interp1d(time['1d_all'], res[f][k]['1d_all'], bounds_error=False)
                     res[f][k]['1d'] = interp(time_3d_last_1d)
 
-                    # todo: interpolate 1d branch in time to 3d
-                    res[f][k]['1d_int'] = np.zeros((time_3d_last_1d.shape[0], v['SegId'].shape[0]))
+                    # interpolate 1d branch in time to 3d
+                    # res[f][k]['1d_int'] = np.zeros((time_3d_last_1d.shape[0], v['SegId'].shape[0]))
                     # assert res[f][k]['1d_int'].shape == res[f][k]['3d_int'].shape, 'size of 1d and 3d results do not agree'
 
-                    # add results at nodes of all segments of branch
-                    for i, s in enumerate(v['SegId']):
-                        # get down-stream node of segment
-                        i_1d = -1
+                    # add inlet FE
+                    res_inflow = res_1d[f][v['SegId'][1] - 1][0]
+                    interp = scipy.interpolate.interp1d(time['1d_all'], res_inflow, bounds_error=False)
+                    res[f][k]['1d_int'] = interp(time_3d_last_1d).reshape(-1, 1)
 
-                        interp = scipy.interpolate.interp1d(time['1d_all'], res_1d[f][s][i_1d], bounds_error=False)
-                        res[f][k]['1d_int'][:, i] = interp(time_3d_last_1d)
+                    # add all FE of segments and their coordinates
+                    for i, s in enumerate(v['SegId'][1:]):
+                        # always exclude first element (identical with last element of previous segment)
+                        res_seg = res_1d[f][s - 1][1:]
+
+                        # generate path for segment FEs, assuming equidistant spacing
+                        path_1d = np.linspace(v['path_1d'][i], v['path_1d'][i+1], res_seg.shape[0] + 1)[1:]
+
+                        # append paths of all segments
+                        res['path'][k]['1d'] = np.hstack((res['path'][k]['1d'], path_1d))
+
+                        # interpolate results to 3D time steps
+                        interp = scipy.interpolate.interp1d(time['1d_all'], res_seg, bounds_error=False)
+                        res[f][k]['1d_int'] = np.hstack((res[f][k]['1d_int'], interp(time_3d_last_1d).T))
+                    # if k=='rt_carotid' and f=='flow':
+                    #     pdb.set_trace()
 
                 if not time['1d_all'].shape[0] == res[f][k]['1d_all'].shape[0]:
                     print('time steps not matching results for 1d results ' + f + ' in GroupId ' + repr(v['GroupId']))
                     pdb.set_trace()
                     return None, None
 
-                if res_3d_caps is not None:
-                    res[f][k]['3d'] = res_3d_caps[f][:, v['BC_FaceID'] - 1] * s_3d
-                    res[f][k]['3d_all'] = res[f][k]['3d']
+                res[f][k]['3d'] = res_3d_caps[f][:, v['BC_FaceID'] - 1] * s_3d
+                res[f][k]['3d_all'] = res[f][k]['3d']
 
-                if res_3d_interior is not None:
-                    res['path'][k] = res_3d_interior['path'][v['SegId']]
-                    res[f][k]['3d_int'] = res_3d_interior[f][:, v['SegId']]
+                # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
+                res['path'][k]['3d'] = v['path_3d']
+                res[f][k]['3d_int'] = res_3d_interior[f][:, v['SegId_cent'] - 1]
+
+                # replace cap integrals
+                res[f][k]['3d_int'][:, i_1d] = res[f][k]['3d']
 
                 # if v['SegId'] in res_0d[f]:
                 #     res[f][k]['0d_all'] = res_0d[f][v['SegId']]
@@ -437,6 +536,7 @@ class Post:
         self.fields = ['pressure', 'flow', 'area']#
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
         self.styles = {'3d': '-', '1d': '--', '0d': ':'}
+        self.colors = {'3d': 'C0', '1d': 'C1', 'r': 'C2'}
 
         self.cgs2mmhg = 7.50062e-4
         self.mlps2lph = 60 / 1000
