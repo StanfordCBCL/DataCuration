@@ -26,9 +26,13 @@ def input_args(description):
     # choose geometries to evaluate
     if param.geo in database.get_geometries():
         geometries = [param.geo]
-    elif param.geo == 'select':
-        geometries = database.get_geometries_select()
-    else:
+    elif param.geo is None:
         geometries = database.get_geometries()
+    elif param.geo[-1] == ':':
+        geo_all = database.get_geometries()
+        geo_first = geo_all.index(param.geo[:-1])
+        geometries = geo_all[geo_first:]
+    else:
+        geometries = database.get_geometries_select(param.geo)
 
-    return database, geometries
+    return database, geometries, param
