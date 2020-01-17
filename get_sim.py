@@ -77,41 +77,74 @@ def write_value(bc, name, units):
     return str(bc_str)
 
 
-# write boundary conditions
-def write_bc(fname, db, geo):
+def get_bc_type(bcs, outlets):
+    bc_type = None
+    for s in outlets:
+        if s in bcs:
+            bc = bcs[s]
+        else:
+            return None, 'boundary conditions do not exist'
+
+        if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
+            bc_type_new = 'rcr'
+        elif 'R' in bc and 'Po' in bc:
+            bc_type_new = 'resistance'
+        elif 'COR' in bc:
+            return None, 'boundary conditions not implemented (coronary)'
+        else:
+            return None, 'boundary conditions not implemented'
+
+        if bc_type is not None and bc_type is not bc_type_new:
+            return None, 'boundary conditions change type'
+        bc_type = bc_type_new
+
+    return bc_type, False
+
+
+def write_bc(fdir, db, geo):
     # get boundary conditions
     bc_def, units = db.get_bcs(geo)
+
+    # check if bc-file exists
     if not bc_def:
-        return False
+        return None, 'boundary conditions do not exist'
 
     # get outlet names
     outlets = db.get_outlet_names(geo)
 
+    # get type of bcs
+    bc_type, err = get_bc_type(bc_def['bc'], outlets)
+    if err:
+        return None, err
+
     # write bc-file
+    fname = os.path.join(fdir, bc_type + '.dat')
     f = open(fname, 'w+')
 
-    keyword = 'newbcface'
-    # not sure if this is right???
-    f.write(keyword + '\n')
+    if bc_type == 'rcr':
+        keyword = 'newbcface'
+        f.write(keyword + '\n')
 
     # write boundary conditions
     for s in outlets:
         bc = bc_def['bc'][s]
-        if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
+        if bc_type == 'rcr':
             f.write(keyword + '\n')
             f.write(s + '\n')
             f.write(write_value(bc, 'Rp', units) + '\n')
             f.write(write_value(bc, 'C', units) + '\n')
             f.write(write_value(bc, 'Rd', units) + '\n')
+            # not sure what this does???
+            f.write('0.0 0\n')
+            f.write('1.0 0\n')
+        elif bc_type == 'resistance':
+            f.write(s + ' ')
+            f.write(write_value(bc, 'R', units) + '\n')
+            # reference pressure not defined in oneDSolver input-file
+            # f.write(write_value(bc, 'Po', units) + '\n')
         else:
-            # todo: what's up with other boundary conditions?
-            print('boundary condition not implemented')
-            return False
-
-        # not sure what this does???
-        f.write('0.0 0\n')
-        f.write('1.0 0\n')
+            return None, 'boundary conditions not implemented'
 
     f.close()
 
-    return True
+    return fname, False
