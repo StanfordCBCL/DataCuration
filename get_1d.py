@@ -22,7 +22,7 @@ sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 import sv_1d_simulation as oned
 
 
-def read_results_1d(fpath_1d, geo):
+def read_results_1d(db, geo):
     # requested output fields
     fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
 
@@ -30,7 +30,7 @@ def read_results_1d(fpath_1d, geo):
     results_1d = {}
     for field in fields_res_1d:
         # list all output files for field
-        result_list_1d = glob.glob(os.path.join(fpath_1d, geo + 'Group*Seg*_' + field + '.dat'))
+        result_list_1d = glob.glob(os.path.join(db.get_solve_dir_1d(geo), geo + 'Group*Seg*_' + field + '.dat'))
 
         # loop segments
         results_1d[field] = {}
@@ -47,20 +47,25 @@ def read_results_1d(fpath_1d, geo):
             group = int(re.findall(r'\d+', f_res)[-2])
             results_1d[field][group] = np.array(results_1d_f)
 
+    # read simulation parameters and add to result dict
+    results_1d['params'] = db.get_1d_params(geo)
+
     return results_1d
 
 
 def generate_1d(db, geo):
+    # use all options, set to None if using defaults (in cgs units)
+
     # number of cycles to run
-    n_cycle = 10
+    n_cycle = 1
 
     # sub-segment size
-    seg_min_num = 10
-    seg_size = 0.1
+    seg_min_num = -1
+    seg_size = 9999
 
     # FEM size
-    min_num_elems = 10
-    element_size = 0.01
+    min_num_elems = 1
+    element_size = 1
 
     # mesh adaptive?
     seg_size_adaptive = False
@@ -72,21 +77,28 @@ def generate_1d(db, geo):
     os.makedirs(fpath_geo, exist_ok=True)
     os.makedirs(fpath_surf, exist_ok=True)
 
-    # write outlet boundary conditions to file if they exist
-    fpath_outlet_bcs = os.path.join(fpath_1d, 'rcrt.dat')
-    if not write_bc(fpath_outlet_bcs, db, geo):
-        return False, 'non-existing boundary conditions'
+    if os.path.exists(db.get_bc_flow_path(geo)):
+        res_3d = db.read_results(db.get_bc_flow_path(geo))
+    else:
+        return False, '3d results do not exist'
 
     # copy surface model to folder if it exists
     if os.path.exists(db.get_surfaces(geo, 'all_exterior')):
         shutil.copy2(db.get_surfaces(geo, 'all_exterior'), fpath_geo)
     else:
-        return False, 'non-existing 3d geometry'
+        return False, '3d geometry does not exist'
 
-    if os.path.exists(db.get_bc_flow_path(geo)):
-        res_3d = db.read_results(db.get_bc_flow_path(geo))
-    else:
-        return False, 'no 3d results'
+    # check if geometry has no or multiple inlets
+    n_inlet = db.count_inlets(geo)
+    if n_inlet == 0:
+        return False, '3d geometry has no inlet'
+    elif n_inlet > 1:
+        return False, '3d geometry has multiple inlets (' + repr(n_inlet) + ')'
+
+    # write outlet boundary conditions to file if they exist
+    fpath_outlet_bcs, err = write_bc(fpath_1d, db, geo)
+    if err:
+        return False, err
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
@@ -135,14 +147,14 @@ def generate_1d(db, geo):
     # set simulation time as end of 3d simulation
     save_data_freq = 1
     dt = 1e-3
-    # num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
-    num_dts = int(flow['time'][0] / dt + 1.0)
 
-    # if True:
+    # run all cycles
+    num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
+
+    # only run until first 3D time step
+    # num_dts = int(flow['time'][0] / dt + 1.0)
+
     try:
-        f_io = io.StringIO()
-        # with contextlib.redirect_stdout(f_io):
-        #     # use all options, set to None if using defaults (in cgs units)
         oned.run(boundary_surfaces_directory=fpath_surf,
                  centerlines_input_file=centerlines_input_file,
                  centerlines_output_file=centerlines_output_file,
@@ -165,7 +177,7 @@ def generate_1d(db, geo):
                  olufsen_material_exp=None,
                  olufsen_material_pressure=pref,
                  outflow_bc_input_file=fpath_outlet_bcs,
-                 outflow_bc_type='rcr',
+                 outflow_bc_type=os.path.splitext(os.path.basename(fpath_outlet_bcs))[0],
                  outlet_face_names_input_file=fpath_outlets,
                  output_directory=fpath_1d,
                  seg_min_num=seg_min_num,
@@ -183,14 +195,9 @@ def generate_1d(db, geo):
                  write_mesh_file=True,
                  write_solver_file=True)
     except (IndexError, KeyError, ZeroDivisionError, RuntimeError) as e:
-        # todo KeyError: log geometries with multiple inlets
-        # todo ZeroDivisionError:
-        #   0070_0001: Cannot read cell data array "GlobalElementID" from PointData in piece 0.  The data array in the element may be too short.
-        # todo RuntimeError:
-        #   0098_0001: Inlet group id is not 0 or number of centerlines is not equal to the number of outlets
         return False, repr(e)
 
-    return True, f_io.getvalue()
+    return True, 'success'
 
 
 def main(db, geometries):
@@ -200,16 +207,14 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        # if os.path.exists(db.get_1d_flow_path(geo)):
-        #     print('  skipping (1d solution alread exists)')
-        #     continue
+        if os.path.exists(os.path.join(db.get_solve_dir_1d(geo), geo + '.vtp')):
+            print('  skipping')
+            continue
 
         # generate oneDSolver input file and check if successful
         success_gen, out_gen = generate_1d(db, geo)
-        # with open(os.path.join(db.get_solve_dir_1d(geo), 'generate_1d.log'), 'w+') as f:
-        #     f.write(out_gen)
 
-        # success_gen = True
+        success_gen = False
         if success_gen:
             # run oneDSolver
             sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
@@ -217,14 +222,19 @@ def main(db, geometries):
             #     f.write(out_solve)
 
             # extract results
-            results_1d = read_results_1d(db.get_solve_dir_1d(geo), geo)
+            results_1d = read_results_1d(db, geo)
             if results_1d['flow']:
                 np.save(db.get_1d_flow_path(geo), results_1d)
+            else:
+                out_gen = 'unconverged'
         else:
-            print('  skipping (1d model creation failed)\n' + out_gen)
+            print('  skipping (1d model creation failed)\n  ' + out_gen)
+
+        # store errors in file
+        db.add_log_file_1d(geo, out_gen)
 
 
 if __name__ == '__main__':
     descr = 'Automatically create, run, and post-process 1d-simulations'
-    d, g = input_args(descr)
+    d, g, _ = input_args(descr)
     main(d, g)
