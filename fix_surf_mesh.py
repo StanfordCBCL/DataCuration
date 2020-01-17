@@ -75,7 +75,6 @@ def get_connectivity(reader):
     :return: [N,3] numpy array with N surface elements in mesh containing point ids
     """
     # loop all cells
-    # todo: this can probably be done without loops
     cells = []
     for i in range(reader.GetNumberOfCells()):
         c = reader.GetCell(i)
