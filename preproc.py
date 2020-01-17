@@ -28,7 +28,7 @@ def main():
     for geo in ['0144_1001']:
         print('Processing ' + geo)
 
-        bc_def, units = db.get_bcs(geo)
+        bc_def, _ = db.get_bcs(geo)
         bc_flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
 
         # write flow file

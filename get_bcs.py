@@ -86,13 +86,17 @@ def get_bcs(tcl, tcl_bc):
 
     # evaluate tcl-script to extract variables for general simulation parameters
     r = tkinter.Tk()
-    # todo: handle non-existing function math_addVectors
     r.tk.eval('source ' + tcl)
-    units = r.tk.getvar('sim_units')
+    params = {}
+    for v in r.tk.eval('info globals').split():
+        try:
+            params[v] = r.tk.getvar(v)
+        except:
+            pass
 
     # close windows
     r_bc.destroy()
     r.destroy()
 
-    return bcs, units
+    return bcs, params
 

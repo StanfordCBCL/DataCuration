@@ -103,7 +103,8 @@ def get_bc_type(bcs, outlets):
 
 def write_bc(fdir, db, geo):
     # get boundary conditions
-    bc_def, units = db.get_bcs(geo)
+    bc_def, params = db.get_bcs(geo)
+    units = units['sim_units']
 
     # check if bc-file exists
     if not bc_def:
