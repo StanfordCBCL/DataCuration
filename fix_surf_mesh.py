@@ -8,6 +8,7 @@ import pdb
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
+from common import input_args
 from get_bc_integrals import read_geo, write_geo
 from get_database import Database
 
@@ -122,6 +123,8 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
     # loop all corresponding surface meshes
     for f in fpath_surf:
         surf_fname = os.path.basename(f)
+        if not surf_fname == 'wall.vtp':
+            continue
         print('  mesh ' + surf_fname)
 
         # get surface mesh
@@ -171,25 +174,22 @@ def is_fixed(folder_out, fpath_surf):
         return True
 
 
-def main():
-    # import model database
-    database = Database()
-
+def main(db, geometries):
     # loop all geometries in repository
     database_surf_fixed = {}
-    for geo in database.get_geometries():
+    for geo in geometries:
         print('Fixing geometry ' + geo)
-        folder_out = os.path.join(database.fpath_gen, 'surfaces', geo)
+        folder_out = os.path.join(db.fpath_gen, 'surfaces', geo)
         try:
             os.mkdir(folder_out)
         except OSError:
             pass
 
         # get volume mesh path
-        fpath_vol = database.get_volume(geo)
+        fpath_vol = db.get_volume(geo)
 
         # get all surface mesh paths
-        fpath_surf = database.get_surfaces_upload(geo)
+        fpath_surf = db.get_surfaces_upload(geo)
 
         if is_fixed(folder_out, fpath_surf):
             print('  skipping (already fixed)')
@@ -200,9 +200,11 @@ def main():
         else:
             database_surf_fixed[geo] = fix_surfaces(fpath_vol, fpath_surf, folder_out)
 
-    fpath_report = os.path.join(database.fpath_gen, 'database', 'surf_fixed')
+    fpath_report = os.path.join(db.fpath_gen, 'database', 'surf_fixed')
     np.save(fpath_report, database_surf_fixed)
 
 
 if __name__ == '__main__':
-    main()
+    descr = 'Fix wrong GlobalElementID'
+    d, g, _ = input_args(descr)
+    main(d, g)
