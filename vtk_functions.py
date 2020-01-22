@@ -90,7 +90,13 @@ def write_geo(fname, reader):
         fname: file name
         reader: vtkXMLPolyData
     """
-    writer = vtk.vtkXMLPolyDataWriter()
+    _, ext = os.path.splitext(fname)
+    if ext == '.vtp':
+        writer = vtk.vtkXMLPolyDataWriter()
+    elif ext == '.vtu':
+        writer = vtk.vtkXMLUnstructuredGridWriter()
+    else:
+        raise ValueError('File extension ' + ext + ' unknown.')
     writer.SetFileName(fname)
     writer.SetInputConnection(reader.GetOutputPort())
     writer.Update()
@@ -175,3 +181,18 @@ def connectivity(inp, origin):
     con.SetClosestPoint(origin[0], origin[1], origin[2])
     con.Update()
     return con
+
+
+def extract_surface(inp):
+    """
+    Extract surface from 3D geometry
+    Args:
+        inp: InputConnection
+
+    Returns:
+        extr: vtkExtractSurface object
+    """
+    extr = vtk.vtkDataSetSurfaceFilter()
+    extr.SetInputData(inp.GetOutput())
+    extr.Update()
+    return extr
