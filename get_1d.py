@@ -57,18 +57,18 @@ def generate_1d(db, geo):
     # use all options, set to None if using defaults (in cgs units)
 
     # number of cycles to run
-    n_cycle = 1
+    n_cycle = 10
 
     # sub-segment size
-    seg_min_num = -1
-    seg_size = 9999
+    seg_min_num = 1
+    seg_size = 1
 
     # FEM size
-    min_num_elems = 1
-    element_size = 1
+    min_num_elems = 10
+    element_size = 0.1
 
     # mesh adaptive?
-    seg_size_adaptive = False
+    seg_size_adaptive = True
 
     # set simulation paths and create folders
     fpath_1d = db.get_solve_dir_1d(geo)
@@ -80,25 +80,25 @@ def generate_1d(db, geo):
     if os.path.exists(db.get_bc_flow_path(geo)):
         res_3d = db.read_results(db.get_bc_flow_path(geo))
     else:
-        return False, '3d results do not exist'
+        return '3d results do not exist'
 
     # copy surface model to folder if it exists
     if os.path.exists(db.get_surfaces(geo, 'all_exterior')):
         shutil.copy2(db.get_surfaces(geo, 'all_exterior'), fpath_geo)
     else:
-        return False, '3d geometry does not exist'
+        return '3d geometry does not exist'
 
     # check if geometry has no or multiple inlets
     n_inlet = db.count_inlets(geo)
     if n_inlet == 0:
-        return False, '3d geometry has no inlet'
+        return '3d geometry has no inlet'
     elif n_inlet > 1:
-        return False, '3d geometry has multiple inlets (' + repr(n_inlet) + ')'
+        return '3d geometry has multiple inlets (' + repr(n_inlet) + ')'
 
     # write outlet boundary conditions to file if they exist
     fpath_outlet_bcs, err = write_bc(fpath_1d, db, geo)
     if err:
-        return False, err
+        return err
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
@@ -109,7 +109,7 @@ def generate_1d(db, geo):
         shutil.copy2(f, fpath_surf)
 
     # compute centerlines only if they don't already exist
-    centerlines_output_file = os.path.join(fpath_1d, 'centerlines.vtp')
+    centerlines_output_file = db.get_centerline_path(geo)
     compute_centerlines = not os.path.exists(centerlines_output_file)
     if compute_centerlines:
         centerlines_input_file = None
@@ -195,9 +195,9 @@ def generate_1d(db, geo):
                  write_mesh_file=True,
                  write_solver_file=True)
     except (IndexError, KeyError, ZeroDivisionError, RuntimeError) as e:
-        return False, repr(e)
+        return repr(e)
 
-    return True, 'success'
+    return None
 
 
 def main(db, geometries):
@@ -212,10 +212,10 @@ def main(db, geometries):
             continue
 
         # generate oneDSolver input file and check if successful
-        success_gen, out_gen = generate_1d(db, geo)
+        msg = generate_1d(db, geo)
 
-        success_gen = False
-        if success_gen:
+        # success_gen = False
+        if not msg:
             # run oneDSolver
             sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
             # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
@@ -225,13 +225,14 @@ def main(db, geometries):
             results_1d = read_results_1d(db, geo)
             if results_1d['flow']:
                 np.save(db.get_1d_flow_path(geo), results_1d)
+                msg = 'success'
             else:
-                out_gen = 'unconverged'
+                msg = 'unconverged'
         else:
-            print('  skipping (1d model creation failed)\n  ' + out_gen)
+            print('  skipping (1d model creation failed)\n  ' + msg)
 
         # store errors in file
-        db.add_log_file_1d(geo, out_gen)
+        db.add_log_file_1d(geo, msg)
 
 
 if __name__ == '__main__':
