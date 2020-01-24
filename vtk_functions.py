@@ -196,3 +196,10 @@ def extract_surface(inp):
     extr.SetInputData(inp.GetOutput())
     extr.Update()
     return extr
+
+
+def clean(inp):
+    cleaner = vtk.vtkCleanPolyData()
+    cleaner.SetInputData(inp.GetOutput())
+    cleaner.Update()
+    return cleaner
