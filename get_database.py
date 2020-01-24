@@ -17,6 +17,7 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_bcs import get_bcs
 from vtk_functions import read_geo
+from simulation_io import get_dict
 
 
 class Database:
@@ -33,13 +34,17 @@ class Database:
         # folder where generated data is saved
         self.fpath_gen = '/home/pfaller/work/osmsc/data_generated'
 
+        # folder for simulation studies
+        self.fpath_studies = '/home/pfaller/work/osmsc/studies'
+
         # folder containing model images
         self.fpath_png = '/home/pfaller/work/osmsc/data_png'
 
+        # folder for simulation studies
+        self.fpath_study = os.path.join(self.fpath_studies, self.study)
+
         # folder where simulation is run
-        self.fpath_solve = os.path.join(self.fpath_gen, 'simulation')
-        if self.study:
-            self.fpath_solve += '_' + self.study
+        self.fpath_solve = os.path.join(self.fpath_study, 'simulation')
 
         # derived paths
         self.fpath_save = os.path.join(self.fpath_gen, 'database', 'database')
@@ -53,6 +58,9 @@ class Database:
 
         # load from hdd
         self.load()
+
+        # svproject object
+        self.svproj = SVProject()
 
     def build_osmsc(self):
         # fields in database
@@ -95,16 +103,40 @@ class Database:
     def has(self, geo, field):
         return self.database[geo][field]
 
+    def exclude_geometries(self, geometries_in):
+        # excluded geometries by Nathan
+        imaging = ['0001', '0020', '0044']
+        animals = ['0066', '0067', '0068', '0069', '0070', '0071', '0072', '0073', '0074']
+        single_vessel = ['0158', '0164', '0165']
+        exclude = imaging + animals + single_vessel
+
+        geometries = []
+        for g in geometries_in:
+            if g[:4] not in exclude:
+                geometries += [g]
+
+        return geometries
+
     def get_geometries(self):
         geometries = os.listdir(self.fpath_sim)
         geometries.sort()
         return geometries
 
     def get_geometries_select(self, name):
-        if name == 'stenosis':
-            geometries = ['0071_0001']
+        if name == 'paper':
+            # pick alpl geometries in rest state
+            geometries = []
+            for geo in self.get_geometries():
+                _, params = self.get_bcs(geo)
+                if params is not None and params['sim_physio_state'] == 'rest':
+                    geometries += [geo]
+            
+            # exclude geometries
+            geometries = self.exclude_geometries(geometries)
         elif name == 'fix_surf_id':
             geometries = ['0140_2001', '0144_1001', '0147_1001', '0160_6001', '0161_0001', '0162_3001', '0163_0001']
+        elif name == 'fix_surf_discr':
+            geometries = ['0069_0001', '0164_0001']
         else:
             raise Exception('Unknown selection ' + name)
         return geometries
@@ -116,16 +148,16 @@ class Database:
             tcl, tcl_bc = self.get_tcl_paths(geo, o)
             if os.path.exists(tcl) and os.path.exists(tcl_bc):
                 return get_bcs(tcl, tcl_bc)
-        else:
-            return None, None
+        return None, None
 
     def get_png(self, geo):
-        return os.path.join(self.fpath_png, 'OSMSC' + geo + '-sim.png')
+        return os.path.join(self.fpath_png, 'OSMSC' + geo + '_sim.png')
 
-    def get_flow(self, geo):
-        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
+    def get_img(self, geo):
+        return exists(os.path.join(self.fpath_sim, geo, 'image_data', 'vti', 'OSMSC' + geo[:4] + '-cm.vti'))
 
     def get_tcl_paths(self, geo, offset):
+        assert len(geo) == 9 and geo[4] == '_' and is_int(geo[:4]) and is_int(geo[5:]), geo + ' not in OSMSC format'
         ids = geo.split('_')
         geo_bc = ids[0] + '_' + str(int(ids[1]) + offset).zfill(4)
         return os.path.join(self.fpath_bc, geo_bc + '.tcl'), os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
@@ -133,16 +165,23 @@ class Database:
     def get_surface_dir(self, geo):
         return os.path.join(self.fpath_gen, 'surfaces', geo)
 
+    def get_sv_surface(self, geo):
+        return exists(os.path.join(self.fpath_gen, 'surfaces_sv', geo + '.vtp'))
+
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
 
-    def get_flow_path(self, geo):
-        return os.path.join(self.fpath_gen, 'flow', geo + '.flow')
+    def get_3d_flow_path(self, geo):
+        return os.path.join(self.fpath_gen, '3d_flow', geo + '.npy')
+
+    def get_centerline_path(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines', geo + '.vtp')
+
+    def get_centerline_path_1d(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines_from_1d', geo + '.vtp')
 
     def gen_dir(self, name):
-        if self.study:
-            name += '_' + self.study
-        fdir = os.path.join(self.fpath_gen, name)
+        fdir = os.path.join(self.fpath_study, name)
         os.makedirs(fdir, exist_ok=True)
         return fdir
 
@@ -156,18 +195,11 @@ class Database:
     def get_1d_flow_path(self, geo):
         return self.gen_file('1d_flow', geo)
 
-    def get_3d_flow_path(self, geo):
-        # return self.gen_file('3d_flow', geo)
-        return os.path.join(self.fpath_gen, '3d_flow_geo_centerline', geo + '.npy')
-
     def get_post_path(self, geo, name):
         return self.gen_file('1d_3d_comparison', geo + '_' + name, 'png')
 
     def get_groupid_path(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), 'outletface_groupid.dat')
-
-    def get_centerline_path(self, geo):
-        return os.path.join(self.fpath_gen, 'centerline', geo + '.vtp')
 
     def get_statistics_dir(self):
         return self.gen_dir('statistics')
@@ -192,14 +224,20 @@ class Database:
         os.makedirs(fsolve, exist_ok=True)
         return fsolve
 
-    def get_dict(self, dict_file):
-        if os.path.exists(dict_file):
-            return np.load(dict_file, allow_pickle=True).item()
-        else:
-            return {}
+    def get_svproj_dir(self, geo):
+        fdir = os.path.join(self.fpath_gen, 'svprojects', geo)
+        os.makedirs(fdir, exist_ok=True)
+        return fdir
+
+    def get_svproj_file(self, geo):
+        fdir = self.get_svproj_dir(geo)
+        return os.path.join(fdir, '.svproj')
+
+    def get_svproj_mdl_file(self, geo):
+        return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['models'], geo + '.mdl')
 
     def add_dict(self, dict_file, geo, add):
-        dict_db = self.get_dict(dict_file)
+        dict_db = get_dict(dict_file)
         dict_db[geo] = add
         np.save(dict_file, dict_db)
 
@@ -208,16 +246,18 @@ class Database:
 
     def add_log_file_1d(self, geo, log):
         self.add_dict(self.get_log_file_1d(), geo, log)
+    
+    def get_1d_3d_comparison(self):
+        return os.path.join(os.path.dirname(self.get_post_path('', '')), '1d_3d_comparison.npy')
 
     def add_1d_3d_comparison(self, geo, err):
-        err_file = os.path.join(os.path.dirname(self.get_post_path(geo, '')), '1d_3d_comparison.npy')
-        self.add_dict(err_file, geo, err)
+        self.add_dict(self.get_1d_3d_comparison(), geo, err)
 
     def get_1d_geo(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp')
 
     def get_1d_params(self, geo):
-        return np.load(os.path.join(self.get_solve_dir_1d(geo), 'parameters.npy'), allow_pickle=True).item()
+        return os.path.join(self.get_solve_dir_1d(geo), 'parameters.npy')
 
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
@@ -275,7 +315,7 @@ class Database:
             if not k == 'inflow':
                 caps[k]['path_1d'][0] = 0
 
-        group, seg_id, grp_nodes, path = self.read_centerline(self.get_centerline_path(geo))
+        group, seg_id, grp_nodes, path = self.read_centerline(self.get_centerline_path_1d(geo))
         for k in caps.keys():
             # caps[k]['SegId_cent'] = seg_id[group == caps[k]['BranchId']]
             caps[k]['SegId_cent'] = grp_nodes[caps[k]['BranchId']]
@@ -307,16 +347,13 @@ class Database:
         surfaces_all = glob.glob(os.path.join(fdir, '*.vtp'))
         if surf == 'all':
             surfaces = surfaces_all
-        elif surf == 'inflow':
-            surfaces = os.path.join(fdir, 'inflow.vtp')
-        elif surf == 'all_exterior':
-            surfaces = os.path.join(fdir, 'all_exterior.vtp')
         elif surf == 'outlets' or surf == 'caps':
+            exclude = ['all_exterior', 'wall', 'stent']
             if surf == 'outlets':
-                exclude = ['all_exterior', 'wall', 'inflow']
-            elif surf == 'caps':
-                exclude = ['all_exterior', 'wall']
+                exclude += ['inflow']
             surfaces = [x for x in surfaces_all if not any(e in x for e in exclude)]
+        elif surf in self.get_surface_names(geo):
+            surfaces = [os.path.join(fdir, surf + '.vtp')]
         else:
             print('Unknown surface option ' + surf)
             surfaces = []
@@ -328,8 +365,20 @@ class Database:
         surfaces.sort()
         return surfaces
 
+    def get_surface_ids(self, geo, surf='all'):
+        surfaces = self.get_surface_names(geo, surf)
+        bc_def, _ = self.get_bcs(geo)
+        ids = []
+        for s in surfaces:
+            ids += [int(float(bc_def['spid'][s]))]
+        ids.sort()
+        return np.array(ids)
+
     def get_volume(self, geo):
         return os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
+
+    def get_volume_mesh(self, geo):
+        return exists(os.path.join(self.fpath_gen, 'volumes', geo + '.vtu'))
 
     def get_outlet_names(self, geo):
         return self.get_surface_names(geo, 'outlets')
@@ -489,9 +538,16 @@ class Database:
                 res[f][k]['3d'] = res_3d_caps[f][:, v['BC_FaceID'] - 1] * s_3d
                 res[f][k]['3d_all'] = res[f][k]['3d']
 
+                # indicator for branching
+                is_vessel = np.array(1 - res_3d_interior['is_branch'][v['SegId_cent'] - 1], dtype=bool)
+                if not is_vessel[1]:
+                    is_vessel[0] = False
+
+                # read interior results
                 # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
-                res['path'][k]['3d'] = v['path_3d']
-                res[f][k]['3d_int'] = res_3d_interior[f][:, v['SegId_cent'] - 1]
+                # res['path'][k]['3d'] = v['path_3d'][is_branch]
+                res['path'][k]['3d'] = v['path_3d'][is_vessel]
+                res[f][k]['3d_int'] = res_3d_interior[f][:, v['SegId_cent'] - 1][:, is_vessel]
 
                 # replace cap integrals
                 res[f][k]['3d_int'][:, i_1d] = res[f][k]['3d']
@@ -531,6 +587,13 @@ class SimVascular:
         return ' ', True
 
 
+class SVProject:
+    def __init__(self):
+        self.dir = {'images': 'Images', 'paths': 'Paths', 'segmentations': 'Segmentations', 'models': 'Models',
+                    'meshes': 'Meshes', 'simulations': 'Simulations'}
+        self.t = '    '
+
+
 class Post:
     def __init__(self):
         self.fields = ['pressure', 'flow', 'area']#
@@ -556,3 +619,18 @@ def run_command(run_folder, command):
             print(output.strip())
     rc = process.poll()
     return rc
+
+
+def is_int(s):
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
+
+
+def exists(fpath):
+    if os.path.exists(fpath):
+        return fpath
+    else:
+        return None

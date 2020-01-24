@@ -16,41 +16,11 @@ import numpy as np
 from common import input_args
 from get_database import Database, SimVascular, Post
 from get_sim import write_bc
+from simulation_io import read_results_1d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
 import sv_1d_simulation as oned
-
-
-def read_results_1d(db, geo):
-    # requested output fields
-    fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
-
-    # read 1D simulation results
-    results_1d = {}
-    for field in fields_res_1d:
-        # list all output files for field
-        result_list_1d = glob.glob(os.path.join(db.get_solve_dir_1d(geo), geo + 'Group*Seg*_' + field + '.dat'))
-
-        # loop segments
-        results_1d[field] = {}
-        for f_res in result_list_1d:
-            with open(f_res) as f:
-                reader = csv.reader(f, delimiter=' ')
-
-                # loop nodes
-                results_1d_f = []
-                for line in reader:
-                    results_1d_f.append([float(l) for l in line if l][1:])
-
-            # store results and GroupId
-            group = int(re.findall(r'\d+', f_res)[-2])
-            results_1d[field][group] = np.array(results_1d_f)
-
-    # read simulation parameters and add to result dict
-    results_1d['params'] = db.get_1d_params(geo)
-
-    return results_1d
 
 
 def generate_1d(db, geo):
@@ -207,22 +177,27 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        if os.path.exists(os.path.join(db.get_solve_dir_1d(geo), geo + '.vtp')):
-            print('  skipping')
-            continue
+        # if os.path.exists(os.path.join(db.get_solve_dir_1d(geo), geo + '.vtp')):
+        #     print('  skipping')
+        #     continue
 
         # generate oneDSolver input file and check if successful
-        msg = generate_1d(db, geo)
+        # msg = generate_1d(db, geo)
 
-        # success_gen = False
+        success_gen = True
+        msg = None
         if not msg:
             # run oneDSolver
-            sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
             # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
             #     f.write(out_solve)
 
             # extract results
-            results_1d = read_results_1d(db, geo)
+            res_dir = db.get_solve_dir_1d(geo)
+            params_file = db.get_1d_params(geo)
+            results_1d = read_results_1d(res_dir, params_file)
+
+            # save results
             if results_1d['flow']:
                 np.save(db.get_1d_flow_path(geo), results_1d)
                 msg = 'success'
