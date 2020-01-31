@@ -180,6 +180,12 @@ class Database:
     def get_centerline_path_1d(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines_from_1d', geo + '.vtp')
 
+    def get_centerline_section_path(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines_sections', geo + '.vtp')
+
+    def get_section_path(self, geo):
+        return os.path.join(self.fpath_gen, 'sections', geo + '.vtp')
+
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
         os.makedirs(fdir, exist_ok=True)
@@ -353,7 +359,7 @@ class Database:
                 exclude += ['inflow']
             surfaces = [x for x in surfaces_all if not any(e in x for e in exclude)]
         elif surf in self.get_surface_names(geo):
-            surfaces = [os.path.join(fdir, surf + '.vtp')]
+            surfaces = os.path.join(fdir, surf + '.vtp')
         else:
             print('Unknown surface option ' + surf)
             surfaces = []
@@ -378,7 +384,7 @@ class Database:
         return os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
 
     def get_volume_mesh(self, geo):
-        return exists(os.path.join(self.fpath_gen, 'volumes', geo + '.vtu'))
+        return os.path.join(self.fpath_gen, 'volumes', geo + '.vtu')
 
     def get_outlet_names(self, geo):
         return self.get_surface_names(geo, 'outlets')
@@ -389,6 +395,24 @@ class Database:
             if 'inflow' in s:
                 n_inlet += 1
         return n_inlet
+
+    def get_constants(self, geo):
+        # get simulation parameters
+        _, params = self.get_bcs(geo)
+
+        constants = {'density': float(params['sim_density']), 'viscosity': float(params['sim_viscosity'])}
+
+        # no conversion for units cgs
+        if params['sim_units'] == 'cm':
+            pass
+        # convert cgm to cgs
+        elif params['sim_units'] == 'mm':
+            constants['density'] *= 1000
+            constants['viscosity'] *= 10
+        else:
+            raise ValueError('Unknown units ' + units)
+
+        return constants
 
     def copy_files(self, geo):
         # define paths
@@ -575,6 +599,7 @@ class SimVascular:
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
         self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
+        self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
 
     def run_pre(self, pre_folder, pre_file):
         subprocess.run([self.svpre, pre_file], cwd=pre_folder)
@@ -586,6 +611,8 @@ class SimVascular:
         run_command(run_folder, [self.onedsolver, run_file])
         return ' ', True
 
+    def run_python(self, command):
+        return subprocess.run([self.sv, ' --python -- '] + command)
 
 class SVProject:
     def __init__(self):
