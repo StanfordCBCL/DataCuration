@@ -48,12 +48,13 @@ def write_model(db, geo):
                   t + '<timestep id="0">',
                   t*2 + '<model_element type="PolyData" num_sampling="0">']
     model_end = [t*3 + '<blend_radii />',
-                 t*3 + '<blend_param blend_iters="2" sub_blend_iters="3" cstr_smooth_iters="2" lap_smooth_iters="50" subdivision_iters="1" decimation="0.01" />',
+                 t*3 + '<blend_param blend_iters="2" sub_blend_iters="3" cstr_smooth_iters="2" lap_smooth_iters="50" '
+                       'subdivision_iters="1" decimation="0.01" />',
                  t*2 + '</model_element>',
                  t + '</timestep>',
                  '</model>']
 
-    # read 3d boundary conditions
+    # read boundary conditions
     bc_def, _ = db.get_bcs(geo)
     bc_def['spid']['wall'] = 0
 
@@ -68,7 +69,7 @@ def write_model(db, geo):
     ids = ids[order]
 
     # display colors for caps
-    colors = cm.plasma(np.linspace(0, 1, len(caps) + 1))
+    colors = cm.jet(np.linspace(0, 1, len(caps)))
 
     # write model file
     with open(db.get_svproj_mdl_file(geo), 'w+') as f:
@@ -120,10 +121,28 @@ def make_folders(db, geo):
     copy_file(db, geo, db.get_sv_surface(geo), 'meshes')
     copy_file(db, geo, db.get_sv_surface(geo), 'models')
 
+    return True
+
+
+def check_files(db, geo):
+    # check if files exist
+    if db.get_volume_mesh(geo) is None:
+        return False, 'no volume mesh'
+    if db.get_sv_surface(geo) is None:
+        return False, 'no SV surface mesh'
+    if db.get_img(geo) is None:
+        return False, 'no medical image'
+    return True, None
+
 
 def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
+
+        success, err = check_files(db, geo)
+        if not success:
+            print('  ' + err)
+            continue
 
         make_folders(db, geo)
         write_svproj(db, geo)

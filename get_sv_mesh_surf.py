@@ -25,75 +25,81 @@ def get_indices(a, b):
     return i
 
 
-def main(db, geometries):
+def generate(db, geo):
     """
     Generate arrays in surface mesh used by SimVascular
     """
-    for geo in geometries:
-        print('Running geometry ' + geo)
 
-        f_surf = db.get_surfaces(geo, 'all_exterior')
-        if not f_surf:
-            print('  no surface mesh')
-            continue
+    f_surf = db.get_surfaces(geo, 'all_exterior')
+    if not f_surf:
+        return 'no surface mesh'
 
-        _, err = write_bc(tempfile.gettempdir(), db, geo)
-        if err:
-            print(err)
-            continue
+    # read volume mesh with results
+    surf, surf_p, surf_c = read_geo(f_surf[0])
 
-        # read volume mesh with results
-        surf, surf_p, surf_c = read_geo(f_surf[0])
+    # reconstruct SimVascular arrays from BC_FaceID
+    face_id = v2n(surf_c.GetArray('BC_FaceID'))
 
-        # reconstruct SimVascular arrays from BC_FaceID
-        face_id = v2n(surf_c.GetArray('BC_FaceID'))
-
-        # read surface ids
+    # read surface ids
+    try:
         caps = get_indices(face_id, db.get_surface_ids(geo, 'caps'))
         inflow = get_indices(face_id, db.get_surface_ids(geo, 'inflow'))
         outlets = get_indices(face_id, db.get_surface_ids(geo, 'outlets'))
+    except (KeyError, TypeError):
+        return 'face missing in boundary conditions'
 
-        # initialize new arrays
-        n_names = ['GlobalBoundaryPoints']
-        c_names = ['GlobalBoundaryCells', 'CapID', 'BadTriangle', 'FreeEdge', 'BooleanRegion', 'ModelFaceID',
-                   'Normals', 'ActiveCells']
-        arrays = {}
-        for n in n_names:
-            arrays[n] = {'handle': surf_p, 'array': np.zeros(surf.GetOutput().GetNumberOfPoints(), dtype=np.int64)}
-        for n in c_names:
-            arrays[n] = {'handle': surf_c, 'array': np.zeros(surf.GetOutput().GetNumberOfCells(), dtype=np.int64)}
+    # initialize new arrays
+    n_names = ['GlobalBoundaryPoints']
+    c_names = ['GlobalBoundaryCells', 'CapID', 'BadTriangle', 'FreeEdge', 'BooleanRegion', 'ModelFaceID',
+               'Normals', 'ActiveCells']
+    arrays = {}
+    for n in n_names:
+        arrays[n] = {'handle': surf_p, 'array': np.zeros(surf.GetOutput().GetNumberOfPoints(), dtype=np.int64)}
+    for n in c_names:
+        arrays[n] = {'handle': surf_c, 'array': np.zeros(surf.GetOutput().GetNumberOfCells(), dtype=np.int64)}
 
-        # rename
-        arrays['ModelFaceID']['array'] = face_id
+    # rename
+    arrays['ModelFaceID']['array'] = face_id
 
-        # all caps
-        arrays['ActiveCells']['array'][caps] = 1
+    # all caps
+    arrays['ActiveCells']['array'][caps] = 1
 
-        # inflow is 1, outflow is 2
-        arrays['CapID']['array'][inflow] = 1
-        arrays['CapID']['array'][outlets] = 2
+    # inflow is 1, outflow is 2
+    arrays['CapID']['array'][inflow] = 1
+    arrays['CapID']['array'][outlets] = 2
 
-        # remove old arrays
-        surf_p.RemoveArray('GlobalNodeID')
-        surf_c.RemoveArray('GlobalElementID')
-        surf_c.RemoveArray('BC_FaceID')
+    # remove old arrays
+    surf_p.RemoveArray('GlobalNodeID')
+    surf_c.RemoveArray('GlobalElementID')
+    surf_c.RemoveArray('BC_FaceID')
 
-        # add new arrays
-        for n, v in arrays.items():
-            out_array = n2v(v['array'])
-            out_array.SetName(n)
-            v['handle'].AddArray(out_array)
+    # add new arrays
+    for n, v in arrays.items():
+        out_array = n2v(v['array'])
+        out_array.SetName(n)
+        v['handle'].AddArray(out_array)
 
-        # generate normals
-        normals = vtk.vtkPolyDataNormals()
-        normals.SetInputData(surf.GetOutput())
-        normals.ComputeCellNormalsOn()
-        normals.ComputePointNormalsOff()
-        normals.ConsistencyOff()
-        normals.Update()
+    # generate normals
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputData(surf.GetOutput())
+    normals.ComputePointNormalsOff()
+    normals.ComputeCellNormalsOn()
+    normals.SplittingOff()
+    normals.Update()
 
-        # export to generated folder
-        write_geo(db.get_sv_surface(geo), normals)
+    # export to generated folder
+    write_geo(db.get_sv_surface(geo), normals)
+
+    return None
+
+
+def main(db, geometries):
+    for geo in geometries:
+        print('Running geometry ' + geo)
+
+        err = generate(db, geo)
+        if err:
+            print('  ' + err)
 
 
 if __name__ == '__main__':
