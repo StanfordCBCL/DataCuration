@@ -115,28 +115,12 @@ def create_centerline(centerline):
     ids = vtk.vtkIdList()
 
     # export dictionary with list of attached branches for each bifurcation
-    # split = {}
-    # i = 0
     for p in range(n_points):
         polydata.GetPointCells(p, ids)
         n_ids = ids.GetNumberOfIds()
         if n_ids > 2:
             # store bifurcation id in array
             bifurcation.SetValue(p, 1)
-            # i += 1
-            #
-            # split[i] = []
-            # # loop all cells connected to point
-            # for j in range(n_ids):
-            #     cell = polydata.GetCell(ids.GetId(j))
-            #
-            #     # loop all points in cell
-            #     for q in range(cell.GetNumberOfPoints()):
-            #
-            #         # append branch id if not yet in list
-            #         b = branch.GetValue(cell.GetPointId(q))
-            #         if b not in split[i]:
-            #             split[i] += [b]
 
     polydata.GetPointData().AddArray(bifurcation)
 
@@ -261,85 +245,6 @@ def get_connectivity(cent):
         assert len(c) >= 3, 'bifurcation with less than 3 branches detected (' + repr(len(c)) + ')'
 
     return connectivity
-
-
-def clean_connectivity(cent, connectivity):
-    # get arrays from centerline
-    bifurcation = v2n(cent.GetOutput().GetCellData().GetArray('BifurcationId'))
-    branch = v2n(cent.GetOutput().GetCellData().GetArray('BranchId'))
-    blanking = v2n(cent.GetOutput().GetCellData().GetArray('Blanking'))
-    group = v2n(cent.GetOutput().GetCellData().GetArray('GroupIds'))
-
-    # all bifurcations
-    bifurcations = np.unique(bifurcation).tolist()
-    bifurcations.remove(-1)
-
-    # store blanking groups for each bifurcation
-    bifurcation_groups = {}
-    for bf in bifurcations:
-        bifurcation_groups[bf] = []
-    for bf in bifurcations:
-        for g in np.unique(group[bifurcation == bf]):
-            if g in np.unique(group[blanking == 1]):
-                bifurcation_groups[bf] += [g]
-
-    # do the actual cleanup
-    for bf, g in bifurcation_groups.items():
-        # find fake bifurcations (within branch): contains no bifurcation group
-        if not g:
-            assert len(connectivity[bf]) <= 2, 'Too many branches'
-
-            # joint branch number for fake inlet, fake outlet, and fake bifurcation
-            if len(connectivity[bf]) == 2:
-                branch[branch == connectivity[bf][1]] = connectivity[bf][0]
-            branch[bifurcation == bf] = connectivity[bf][0]
-
-            # remove bifurcation
-            bifurcation[bifurcation == bf] = -1
-            del connectivity[bf]
-
-        else:
-            # find joint bifurcations: same bifurcation group present in muliple bifurcations
-            for bfbf, gg in bifurcation_groups.items():
-                if bfbf != bf and gg == g and bf in connectivity:
-                    # joint bifurcation number
-                    bifurcation[bifurcation == bfbf] = bf
-                    connectivity[bf] += connectivity[bfbf]
-                    del connectivity[bfbf]
-
-    # store old (remaining) numbering of bifurcations and branches
-    branches_old = []
-    bifurcations_old = []
-    for bf, branches in connectivity.items():
-        bifurcations_old += [bf]
-        branches_old += branches
-    bifurcations_old.sort()
-    branches_old = np.unique(branches_old).tolist()
-
-    # number bifurcations and branches consecutively
-    connectivity_clean = {}
-    for bf_new, bf_old in enumerate(bifurcations_old):
-        # check if fake bifurcation still exists
-        # assert len(connectivity[bf_old]) >= 3, 'fake branches still present'
-
-        bifurcation[bifurcation == bf_old] = bf_new
-        connectivity_clean[bf_new] = []
-        for br_old in connectivity[bf_old]:
-            br_new = branches_old.index(br_old)
-            branch[branch == br_old] = br_new
-            connectivity_clean[bf_new] += [br_new]
-
-    # replace arrays
-    assert not np.any(branch[bifurcation == -1] == -1), 'branch array inconsistent'
-    assert not np.any(bifurcation[branch == -1] == -1), 'bifurcation array inconsistent'
-    replace(cent, 'BranchId', branch)
-    replace(cent, 'BifurcationId', bifurcation)
-
-    # remove outdated arrays
-    cent.GetOutput().GetPointData().RemoveArray('BranchId')
-    cent.GetOutput().GetPointData().RemoveArray('BifurcationId')
-
-    return connectivity_clean
 
 
 def transfer_arrays(src, trg):
