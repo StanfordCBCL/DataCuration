@@ -6,6 +6,7 @@ import glob
 import subprocess
 import csv
 import re
+import argparse
 import pdb
 
 import numpy as np
@@ -17,7 +18,41 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_bcs import get_bcs
 from vtk_functions import read_geo
-from simulation_io import get_dict
+from common import get_dict
+
+
+def input_args(description):
+    """
+    Handles input arguments to scripts
+    Args:
+        description: script description (hgelp string)
+
+    Returns:
+        database: Database object for study
+        geometries: list of geometries to evaluate
+    """
+    # parse input arguments
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('study', help='study name')
+    parser.add_argument('-g', '--geo', help='individual geometry or subset name')
+    param = parser.parse_args()
+
+    # get model database
+    database = Database(param.study)
+
+    # choose geometries to evaluate
+    if param.geo in database.get_geometries():
+        geometries = [param.geo]
+    elif param.geo is None:
+        geometries = database.get_geometries()
+    elif param.geo[-1] == ':':
+        geo_all = database.get_geometries()
+        geo_first = geo_all.index(param.geo[:-1])
+        geometries = geo_all[geo_first:]
+    else:
+        geometries = database.get_geometries_select(param.geo)
+
+    return database, geometries, param
 
 
 class Database:
@@ -174,11 +209,32 @@ class Database:
     def get_3d_flow_path(self, geo):
         return os.path.join(self.fpath_gen, '3d_flow', geo + '.npy')
 
+    def get_3d_flow_path_oned(self, geo):
+        return os.path.join(self.fpath_gen, '3d_flow_oned', geo + '.npy')
+
+    def get_3d_flow_path_oned_vtp(self, geo):
+        return os.path.join(self.fpath_gen, '3d_flow_oned', geo + '.vtp')
+
+    def get_3d_flow_path_old(self, geo):
+        return os.path.join(self.fpath_gen, '3d_flow_no_exclusion', geo + '.npy')
+
     def get_centerline_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines', geo + '.vtp')
 
+    def get_centerline_outlet_path(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines', 'outlets_' + geo)
+
+    def get_surfaces_grouped_path(self, geo):
+        return os.path.join(self.fpath_gen, 'surfaces_grouped_uncut', geo + '.vtp')
+
     def get_centerline_path_1d(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines_from_1d', geo + '.vtp')
+
+    def get_centerline_path_oned(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines_oned', geo + '.vtp')
+
+    def get_centerline_path_raw(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines_raw', geo + '.vtp')
 
     def get_centerline_section_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines_sections', geo + '.vtp')
@@ -271,16 +327,16 @@ class Database:
         return surfaces
 
     def add_cap_ordered(self, caps, keys_ordered, keys_left, c):
-        for k in sorted(caps.keys()):
+        for k in sorted(caps):
             if c in k.lower() and k in keys_left:
                 keys_ordered.append(k)
                 keys_left.remove(k)
 
     def read_centerline(self, fpath):
         reader_1d, nodes_1d, cells_1d = read_geo(fpath)
-        group = v2n(cells_1d.GetArray('group'))
+        group = v2n(cells_1d.GetArray('GroupIds'))
+        # group = v2n(cells_1d.GetArray('group'))
         seg_id = v2n(cells_1d.GetArray('seg_id'))
-        point_id = v2n(nodes_1d.GetArray('point_id'))
         path = v2n(nodes_1d.GetArray('path'))
 
         grp = np.unique(group)
@@ -369,6 +425,24 @@ class Database:
         surfaces = self.get_surfaces(geo, surf)
         surfaces = [os.path.splitext(os.path.basename(s))[0] for s in surfaces]
         surfaces.sort()
+
+        if surf == 'caps':
+            # nicely ordered cap names for output
+            surfaces = sorted(surfaces)
+            caps = surfaces.copy()
+            keys_left = surfaces.copy()
+            keys_ordered = []
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'inflow')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'aorta')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'p_')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'd_')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'left')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'right')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'l_')
+            self.add_cap_ordered(caps, keys_ordered, keys_left, 'r_')
+            keys_ordered += keys_left
+            surfaces = keys_ordered
+
         return surfaces
 
     def get_surface_ids(self, geo, surf='all'):
@@ -463,7 +537,7 @@ class Database:
         if res_3d_caps is None:
             return None, None
 
-        res_3d_interior = self.read_results(self.get_3d_flow_path(geo))
+        res_3d_interior = self.read_results(self.get_3d_flow_path_old(geo))
         if res_3d_interior is None:
             return None, None
 
@@ -511,7 +585,6 @@ class Database:
                     i_1d = 0
 
                     if f == 'flow':
-                        # reverse flow direction so that all caps have positive flow (looks nicer)
                         s_3d = -1
 
                 # assemble simulation results
@@ -552,7 +625,7 @@ class Database:
                         interp = scipy.interpolate.interp1d(time['1d_all'], res_seg, bounds_error=False)
                         res[f][k]['1d_int'] = np.hstack((res[f][k]['1d_int'], interp(time_3d_last_1d).T))
                     # if k=='rt_carotid' and f=='flow':
-                    #     pdb.set_trace()
+                    pdb.set_trace()
 
                 if not time['1d_all'].shape[0] == res[f][k]['1d_all'].shape[0]:
                     print('time steps not matching results for 1d results ' + f + ' in GroupId ' + repr(v['GroupId']))
@@ -563,9 +636,12 @@ class Database:
                 res[f][k]['3d_all'] = res[f][k]['3d']
 
                 # indicator for branching
-                is_vessel = np.array(1 - res_3d_interior['is_branch'][v['SegId_cent'] - 1], dtype=bool)
-                if not is_vessel[1]:
-                    is_vessel[0] = False
+                if 'is_branch' in res_3d_interior:
+                    is_vessel = np.array(1 - res_3d_interior['is_branch'][v['SegId_cent'] - 1], dtype=bool)
+                    if not is_vessel[1]:
+                        is_vessel[0] = False
+                else:
+                    is_vessel = np.ones(v['path_3d'].shape, dtype=bool)
 
                 # read interior results
                 # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
@@ -600,6 +676,8 @@ class SimVascular:
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
         self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
+        # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
+        self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/bin/simvascular'
 
     def run_pre(self, pre_folder, pre_file):
         subprocess.run([self.svpre, pre_file], cwd=pre_folder)
@@ -613,6 +691,14 @@ class SimVascular:
 
     def run_python(self, command):
         return subprocess.run([self.sv, ' --python -- '] + command)
+
+    def run_python_debug(self, command):
+        command = [self.sv, ' --python -- '] + command
+        out_str = ''
+        for c in command:
+            out_str += c + ' '
+        print(out_str)
+        # return subprocess.run(['gdb', self.sv_debug])
 
 class SVProject:
     def __init__(self):
