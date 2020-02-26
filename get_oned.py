@@ -21,7 +21,7 @@ def create_centerline(centerline):
     # check if geometry is one piece
     test = connectivity_all(cent)
     n_geo = test.GetNumberOfExtractedRegions()
-    assert n_geo == 1, 'centerline consists of more than one piece (' + repr(n_geo) + ')'
+    assert n_geo == 1, 'input centerline consists of more than one piece (' + repr(n_geo) + ')'
 
     n_points = cent.GetNumberOfPoints()
     n_cells = cent.GetNumberOfCells()
@@ -39,7 +39,7 @@ def create_centerline(centerline):
         # individual centerline
         cell = cent.GetCell(c)
 
-        # loop through all points in centerline (assumes they are ordered consecutively)
+        # loop through all points in centerline (assumes points are ordered consecutively)
         for p in range(cell.GetPointIds().GetNumberOfIds()):
             i = cell.GetPointId(p)
 
@@ -88,6 +88,7 @@ def create_centerline(centerline):
                 mesh[i] += [c]
 
     # find unique segments by the combintation of centerlines in each point
+    assert np.unique(mesh).shape[0] > 1, 'geometry is a single branch'
     sections = sorted(np.unique(mesh), key=len, reverse=True)
 
     assert len(sections[0]) == n_cells, 'inlet segment not detected'
@@ -128,28 +129,40 @@ def create_centerline(centerline):
 
 
 def clean_bifurcation(centerline):
-    # make sure actual bifurcation points are included
+    # modify this array to ensure bifurcations are only where they should be
     bf = centerline.GetPointData().GetArray('CenterlineSectionBifurcation')
+
+    # make sure actual bifurcation points are included
     bf_id = centerline.GetPointData().GetArray('BifurcationId')
     for i in range(centerline.GetNumberOfPoints()):
         if bf_id.GetValue(i) > -1:
             bf.SetValue(i, 1)
 
-    # extract all bifurcations
+    # exclude bifurcations that are somewhere in the middle of a branch
     clip = split_centerline(centerline)
     bifurcations = connectivity_all(clip.GetOutput(0))
     for i in range(bifurcations.GetNumberOfExtractedRegions()):
-        # extract
+        # extract bifurcation
         t = threshold(bifurcations.GetOutput(), i, 'RegionId').GetOutput()
 
         # not a real bifurcation if it contains only one BranchId
         if np.unique(v2n(t.GetPointData().GetArray('BranchId'))).shape[0] == 1:
-            # remove bifurcation
+            # remove bifurcation (convert to branch)
             t_p_id = t.GetPointData().GetArray('GlobalNodeID')
             for j in range(t.GetNumberOfPoints()):
                 bf.SetValue(t_p_id.GetValue(j), 0)
 
-    # todo: what happens if inlet or outlets are bifurcations?
+    # eclude branches that consist of a single point
+    clip = split_centerline(centerline)
+    branches = connectivity_all(clip.GetOutput(1))
+    for i in range(branches.GetNumberOfExtractedRegions()):
+        # extract branch
+        t = threshold(branches.GetOutput(), i, 'RegionId').GetOutput()
+
+        # remove branch (convert to bifurcation)
+        if t.GetNumberOfPoints() == 1:
+            t_p_id = t.GetPointData().GetArray('GlobalNodeID')
+            bf.SetValue(t_p_id.GetValue(j), 1)
 
 
 def split_centerline(centerline):
@@ -203,88 +216,73 @@ def group_centerline(centerline):
     geo.SetInputData(append.GetOutput())
     geo.Update()
 
+    # add path array to geometry
+    points = v2n(geo.GetOutput().GetPoints().GetData())
+    branch_id = v2n(geo.GetOutput().GetPointData().GetArray('BranchId'))
+    branches = np.unique(branch_id).tolist()
+    branches.remove(-1)
+    dist = np.zeros(points.shape[0])
+    for br in branches:
+        ids = branch_id == br
+        dist[ids] = np.cumsum(np.insert(np.linalg.norm(np.diff(points[ids], axis=0), axis=1), 0, 0))
+    array = n2v(dist)
+    array.SetName('Path')
+    geo.GetOutput().GetPointData().AddArray(array)
+
     return geo
 
 
-def get_connectivity(cent):
-    # read arrays from centerline
-    bifurcation = v2n(cent.GetPointData().GetArray('BifurcationId'))
-    branch = v2n(cent.GetPointData().GetArray('BranchId'))
-
-    # get centerline connectivity: which branches are attached to which bifurcation?
-    connectivity = {}
-    for c in range(cent.GetNumberOfCells()):
-        ele = cent.GetCell(c)
-        point_ids = np.array([ele.GetPointIds().GetId(i) for i in range(ele.GetPointIds().GetNumberOfIds())])
-        br = branch[point_ids].tolist()
-
-        # find cells that are at borders of bifurcations (more two unique RegionIds)
-        if np.unique(br).shape[0] == 2:
-            # should be one branch and one bifurcation
-            assert -1 in br, 'No bifurcation in cell'
-
-            # local node ids of branch and bifurcation (0 or 1)
-            i_br_ele = br.index(-1)
-            i_bf_ele = int(not i_br_ele)
-
-            # branch and bifurcation id
-            i_bf = bifurcation[point_ids[i_br_ele]]
-            i_br = branch[point_ids[i_bf_ele]]
-
-            assert i_bf != -1, 'Multiple bifurcations in cell'
-            assert i_br != -1, 'Multiple branches in cell'
-
-            # store unique branch id
-            if i_bf in connectivity:
-                if i_br not in connectivity[i_bf]:
-                    connectivity[i_bf] += [i_br]
-            else:
-                connectivity[i_bf] = [i_br]
-
-    for c in connectivity.values():
-        assert len(c) >= 3, 'bifurcation with less than 3 branches detected (' + repr(len(c)) + ')'
-
-    return connectivity
-
-
 def transfer_arrays(src, trg):
+    # get mapping between src and trg points
     tree = scipy.spatial.KDTree(v2n(src.GetPoints().GetData()))
     _, ids = tree.query(trg.GetPoints().GetData())
 
+    # loop all arrays
     for a in range(src.GetPointData().GetNumberOfArrays()):
+        # get source array
         array_src = src.GetPointData().GetArray(a)
 
+        # setup target array
         array_trg = vtk.vtkDoubleArray()
-        array_trg.SetName(src.GetPointData().GetArrayName(a))
-        array_trg.SetNumberOfValues(trg.GetNumberOfPoints())
+        array_trg.SetName(array_src.GetName())
+        array_trg.SetNumberOfComponents(array_src.GetNumberOfComponents())
+        array_trg.SetNumberOfValues(array_src.GetNumberOfValues())
+
+        # copy array values using point map
         for i, j in enumerate(ids):
-            array_trg.SetValue(i, array_src.GetValue(j))
+            val = array_src.GetTuple(j)
+            if len(val) == 1:
+                array_trg.SetValue(i, val[0])
+            elif len(val) == 3:
+                array_trg.SetTuple3(i, val[0], val[1], val[2])
+            else:
+                raise ValueError('Not implemented')
+
         trg.GetPointData().AddArray(array_trg)
 
 
 def get_model(fpath_cent_raw, fpath_cent_sections):
     # read raw centerline from file
-    cent_raw, _, _ = read_geo(fpath_cent_raw)
+    cent_raw = read_geo(fpath_cent_raw)
 
-    # create watertight centerline
-    cent_water = create_centerline(cent_raw)
+    # create "clean" watertight centerline
+    cent_clean = create_centerline(cent_raw)
 
-    # read centerline with CenterlineSectionBifurcation point array
-    cent_sections, _, _ = read_geo(fpath_cent_sections)
+    # read "dirty" centerline with CenterlineSectionBifurcation point array (cells might be disconnected or distorted)
+    cent_dirty = read_geo(fpath_cent_sections)
 
     # move point arrays to split centerline
-    transfer_arrays(cent_sections.GetOutput(), cent_water)
+    # todo: merge all steps in one by creating a clean centerline from the beginning
+    transfer_arrays(cent_dirty.GetOutput(), cent_clean)
 
     # make sure only real bifurcations are included
-    clean_bifurcation(cent_water)
+    # todo: possibly make bifurcation detection more robust so this step is not neccessary
+    clean_bifurcation(cent_clean)
 
     # split centerline
-    cent_split = group_centerline(cent_water)
+    cent_split = group_centerline(cent_clean)
 
-    # get centerline branch and bifurcation connectivity
-    split = get_connectivity(cent_split.GetOutput())
-
-    return cent_split, split
+    return cent_split
 
 
 def main(db, geometries):
@@ -296,12 +294,11 @@ def main(db, geometries):
             continue
 
         try:
-            mesh, split = get_model(db.get_centerline_path_raw(geo), db.get_centerline_path(geo))
-        except (AssertionError, AttributeError, KeyError) as e:
+            mesh = get_model(db.get_centerline_path_raw(geo), db.get_centerline_path(geo))
+        except (AssertionError, AttributeError, KeyError, TypeError) as e:
             print('  ' + str(e))
             continue
 
-        print(split)
         write_geo(db.get_centerline_path_oned(geo), mesh)
 
 
