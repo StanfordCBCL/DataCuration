@@ -21,6 +21,9 @@ class Integration:
         except AttributeError:
             raise Exception('vtkIntegrateAttributes is currently only supported by pvpython')
 
+        if not inp.GetOutput().GetNumberOfPoints():
+            raise Exception('Empty slice')
+
         self.integrator.SetInputData(inp.GetOutput())
         self.integrator.Update()
 
@@ -62,6 +65,56 @@ class Integration:
         return v2n(self.integrator.GetOutput().GetCellData().GetArray('Area'))[0]
 
 
+class ClosestPoints:
+    """
+    Find closest points within a geometry
+    """
+    def __init__(self, inp):
+        if isinstance(inp, str):
+            geo, _, _ = read_geo(inp)
+            inp = geo.GetOutput()
+        dataset = vtk.vtkPolyData()
+        dataset.SetPoints(inp.GetPoints())
+
+        locator = vtk.vtkPointLocator()
+        locator.Initialize()
+        locator.SetDataSet(dataset)
+        locator.BuildLocator()
+
+        self.locator = locator
+
+    def search(self, points):
+        """
+        Get ids of points in geometry closest to input points
+        Args:
+            points: list of points to be searched
+
+        Returns:
+            Id list
+        """
+        ids = []
+        for p in points:
+            ids += [self.locator.FindClosestPoint(p)]
+        return ids
+
+
+def collect_arrays(output):
+    res = {}
+    for i in range(output.GetNumberOfArrays()):
+        name = output.GetArrayName(i)
+        data = output.GetArray(i)
+        res[name] = v2n(data)
+    return res
+
+
+def get_all_arrays(geo):
+    # collect all arrays
+    cell_data = collect_arrays(geo.GetOutput().GetCellData())
+    point_data = collect_arrays(geo.GetOutput().GetPointData())
+
+    return point_data, cell_data
+
+
 def read_geo(fname):
     """
     Read geometry from file, chose corresponding vtk reader
@@ -80,7 +133,8 @@ def read_geo(fname):
         raise ValueError('File extension ' + ext + ' unknown.')
     reader.SetFileName(fname)
     reader.Update()
-    return reader, reader.GetOutput().GetPointData(), reader.GetOutput().GetCellData()
+
+    return reader
 
 
 def write_geo(fname, reader):
@@ -98,7 +152,7 @@ def write_geo(fname, reader):
     else:
         raise ValueError('File extension ' + ext + ' unknown.')
     writer.SetFileName(fname)
-    writer.SetInputConnection(reader.GetOutputPort())
+    writer.SetInputConnection(reader.GetOutputPort(0))
     writer.Update()
     writer.Write()
 
@@ -114,7 +168,8 @@ def threshold(inp, t, name):
         reader, point data
     """
     thresh = vtk.vtkThreshold()
-    thresh.SetInputConnection(inp.GetOutputPort())
+    # thresh.SetInputConnection(inp.GetOutputPort())
+    thresh.SetInputData(inp)
     thresh.SetInputArrayToProcess(0, 0, 0, 1, name)
     thresh.ThresholdBetween(t, t)
     thresh.Update()
@@ -166,6 +221,16 @@ def cut_plane(inp, origin, normal):
     return cut
 
 
+def get_points_cells(inp):
+    cells = []
+    for i in range(res.GetOutput().GetNumberOfCells()):
+        cell_points = []
+        for j in range(res.GetOutput().GetCell(i).GetNumberOfPoints()):
+            cell_points += [res.GetOutput().GetCell(i).GetPointId(j)]
+        cells += [cell_points]
+    return v2n(res.GetOutput().GetPoints().GetData()), np.array(cells)
+
+
 def connectivity(inp, origin):
     """
     If there are more than one unconnected geometries, extract the closest one
@@ -183,12 +248,28 @@ def connectivity(inp, origin):
     return con
 
 
+def connectivity_all(inp):
+    """
+    Color regions according to connectivity
+    Args:
+        inp: InputConnection
+    Returns:
+        con: connectivity object
+    """
+    con = vtk.vtkConnectivityFilter()
+    con.SetInputData(inp)
+    con.SetExtractionModeToAllRegions()
+    con.ColorRegionsOn()
+    con.Update()
+    assert con.GetNumberOfExtractedRegions() > 0, 'empty geometry'
+    return con
+
+
 def extract_surface(inp):
     """
     Extract surface from 3D geometry
     Args:
         inp: InputConnection
-
     Returns:
         extr: vtkExtractSurface object
     """
@@ -199,7 +280,47 @@ def extract_surface(inp):
 
 
 def clean(inp):
+    """
+    Merge duplicate Points
+    """
     cleaner = vtk.vtkCleanPolyData()
     cleaner.SetInputData(inp.GetOutput())
+    # cleaner.SetTolerance(1.0e-3)
+    cleaner.PointMergingOn()
     cleaner.Update()
     return cleaner
+
+
+def scalar_array(length, name, fill):
+    """
+    Create vtkIdTypeArray array with given name and constant value
+    """
+    ids = vtk.vtkIdTypeArray()
+    ids.SetNumberOfValues(length)
+    ids.SetName(name)
+    ids.Fill(fill)
+    return ids
+
+
+def add_scalars(inp, name, fill):
+    """
+    Add constant value array to point and cell data
+    """
+    inp.GetOutput().GetCellData().AddArray(scalar_array(inp.GetOutput().GetNumberOfCells(), name, fill))
+    inp.GetOutput().GetPointData().AddArray(scalar_array(inp.GetOutput().GetNumberOfPoints(), name, fill))
+
+
+def rename(inp, old, new):
+    if inp.GetOutput().GetCellData().HasArray(new):
+        inp.GetOutput().GetCellData().RemoveArray(new)
+    if inp.GetOutput().GetPointData().HasArray(new):
+        inp.GetOutput().GetPointData().RemoveArray(new)
+    inp.GetOutput().GetCellData().GetArray(old).SetName(new)
+    inp.GetOutput().GetPointData().GetArray(old).SetName(new)
+
+
+def replace(inp, name, array):
+    arr = n2v(array)
+    arr.SetName(name)
+    inp.GetOutput().GetCellData().RemoveArray(name)
+    inp.GetOutput().GetCellData().AddArray(arr)
