@@ -9,12 +9,14 @@ import re
 import sys
 import scipy
 import pdb
+import vtk
 
 import numpy as np
 
 from common import get_dict
 from get_database import input_args
-from vtk_functions import read_geo
+from vtk_functions import read_geo, collect_arrays, get_all_arrays
+from get_bc_integrals import get_res_names
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
@@ -41,7 +43,7 @@ def read_results_1d(res_dir, params_file=None):
     results_1d = {}
     for field in fields_res_1d:
         # list all output files for field
-        result_list_1d = glob.glob(os.path.join(res_dir, '*Group*Seg*_' + field + '.dat'))
+        result_list_1d = glob.glob(os.path.join(res_dir, '*branch*seg*_' + field + '.dat'))
 
         # loop segments
         results_1d[field] = {}
@@ -55,8 +57,11 @@ def read_results_1d(res_dir, params_file=None):
                     results_1d_f.append([float(l) for l in line if l][1:])
 
             # store results and GroupId
-            group = int(re.findall(r'\d+', f_res)[-2])
-            results_1d[field][group] = np.array(results_1d_f)
+            seg = int(re.findall(r'\d+', f_res)[-1])
+            branch = int(re.findall(r'\d+', f_res)[-2])
+            if branch not in results_1d[field]:
+                results_1d[field][branch] = {}
+            results_1d[field][branch][seg] = np.array(results_1d_f)
 
     # read simulation parameters and add to result dict
     results_1d['params'] = get_dict(params_file)
@@ -65,138 +70,86 @@ def read_results_1d(res_dir, params_file=None):
 
 
 def load_results_3d(f_res_3d):
-    res_3d = get_dict(f_res_3d)
-    res_3d['flow'] = res_3d['velocity']
-    del res_3d['velocity']
-    return res_3d
+    """
+    Read 3d results embedded in centerline and sort according to branch at time step
+    """
+    # read 1d geometry
+    reader = read_geo(f_res_3d)
+    res = collect_arrays(reader.GetOutput().GetPointData())
+
+    # names of output arrays
+    res_names = get_res_names(reader, ['pressure', 'velocity'])
+
+    # get time steps
+    times = np.unique([float(k.split('_')[1]) for k in res_names])
+
+    # get branch ids
+    branches = np.unique(res['BranchId']).tolist()
+    branches.remove(-1)
+
+    # add time
+    out = {'time': times}
+
+    # initilize output arrays [time step, branch]
+    for f in res_names:
+        name = f.split('_')[0]
+        out[name] = {}
+        for br in branches:
+            ids = res['BranchId'] == br
+            out[name][br] = np.zeros((times.shape[0], np.sum(ids)))
+
+    # read branch-wise results from geometry
+    for f in res_names:
+        name, time = f.split('_')
+        for br in branches:
+            ids = res['BranchId'] == br
+            out[name][br][float(time) == times] = res[f][ids]
+
+    # add area (identical for all time steps)
+    out['area'] = {}
+    for br in branches:
+        ids = res['BranchId'] == br
+        out['area'][br] = np.tile(res['area'][ids], (times.shape[0], 1))
+
+    # rename velocity to flow
+    out['flow'] = out['velocity']
+    del out['velocity']
+
+    return out
 
 
-class Geometry(object):
-    def __init__(self, fpath):
-        reader, pts, cls = read_geo(fpath)
-        self.reader = reader
+def get_map(surf, centerline, bc_def):
+    # map BC_FaceID -> outlet name
+    bc_face_id = {}
+    for k, i in bc_def['spid'].items():
+        if k != 'wall':
+            bc_face_id[int(i)] = k
 
-        self.p_arrays = {}
-        for i in range(pts.GetNumberOfArrays()):
-            self.p_arrays[pts.GetArrayName(i)] = v2n(pts.GetArray(i))
+    # cell data to point data to have BC_FaceID on points
+    surf_point = vtk.vtkCellDataToPointData()
+    surf_point.SetInputData(surf)
+    surf_point.Update()
 
-        self.c_arrays = {}
-        for i in range(cls.GetNumberOfArrays()):
-            self.c_arrays[cls.GetArrayName(i)] = v2n(cls.GetArray(i))
+    # search tree for surface points
+    tree = scipy.spatial.KDTree(v2n(surf.GetPoints().GetData()))
+    ids = vtk.vtkIdList()
 
-        self.groups = np.unique(self.c_arrays['GroupIds'])
+    # map outlet name -> BranchId
+    caps = {}
+    for p in range(centerline.GetNumberOfPoints()):
+        centerline.GetPointCells(p, ids)
+        n_ids = ids.GetNumberOfIds()
+        if n_ids == 1:
+            # get closest point in surface
+            dist, i = tree.query(centerline.GetPoint(p))
+            assert dist < 1.0e-14, 'centerline does not coincide with surface mesh'
 
-    def cell(self, i):
-        return self.reader.GetOutput().GetCell(i)
+            name = bc_face_id[surf_point.GetOutput().GetPointData().GetArray('BC_FaceID').GetValue(i)]
+            branch = centerline.GetPointData().GetArray('BranchId').GetValue(p)
 
-    def cell_points(self, i):
-        cell = self.cell(i)
-        return [cell.GetPointIds().GetId(i) for i in range(cell.GetNumberOfPoints())]
-
-    def group_point_ids(self):
-        point_ids = {}
-        for g in self.groups:
-            ids = []
-            for c in self.group_cell_id(g):
-                ids += self.cell_points(c)
-            point_ids[g] = np.unique(ids)
-        return point_ids
-
-    def get_group_array(self, name):
-        res = {}
-        for g in self.groups:
-            res[g] = self.p_arrays[name][self.group_point_ids()[g]]
-        return res
-
-
-class OneDModel(Geometry):
-    def __init__(self, f_geo, f_caps):
-        super().__init__(f_geo)
-        
-        self.caps = self.get_map(f_caps)
-
-    def group_cell_id(self, g):
-        # get all ids
-        return np.where(self.c_arrays['GroupIds'] == g)[0]
-
-    def group_seg_ids(self):
-        seg_ids = {}
-        for g in self.groups:
-            seg_ids[g] = self.c_arrays['seg_id'][self.group_cell_id(g)]
-        return seg_ids
-
-    def get_seg_array(self, name):
-        res = {}
-        for s in self.c_arrays['seg_id']:
-            i = np.where(self.c_arrays['seg_id'] == s)[0]
-            res[s] = []
-            for p in self.cell_points(i):
-                res[s] += [self.p_arrays[name][p]]
-        return res
-
-    def get_map(self, fpath):
-        # add inlet segment id
-        caps = {'inflow': {}}
-        caps['inflow']['cap'] = 0
-
-        # add outlet segment id
-        with open(fpath) as f:
-            for line in csv.reader(f, delimiter=' '):
-                caps[line[0]] = {}
-                caps[line[0]]['cap'] = int(line[2])
-
-        # add GroupIds
-        for c, v in caps.items():
-            caps[c]['GroupId'] = self.c_arrays['GroupIds'][self.c_arrays['seg_id'] == v['cap']][0]
-
-        # add SegIds
-        for c, v in caps.items():
-            caps[c]['SegId'] = self.c_arrays['seg_id'][self.group_seg_ids()[caps[c]['GroupId']]]
-
-        return caps
-    
-
-class Centerline(Geometry):
-    def __init__(self, fpath):
-        super().__init__(fpath)
-
-    def group_cell_id(self, g):
-        # get only first id
-        return [np.where(self.c_arrays['GroupIds'] == g)[0][0]]
-
-    def path(self):
-        points = v2n(self.reader.GetOutput().GetPoints().GetData())
-        paths = {}
-        for g, ids in self.group_point_ids().items():
-            paths[g] = np.cumsum(np.insert(np.linalg.norm(np.diff(points[ids], axis=0), axis=1), 0, 0))
-        return paths
-
-    def branch(self):
-        branches = {}
-        for g in self.groups:
-            branches[g] = np.where(1 - self.p_arrays['CenterlineSectionBifurcation'][self.group_point_ids()[g]])[0]
-        return branches
-
-
-    def InteriorGroups(self):
-        return self.c_arrays['GroupIds'][self.IntegrationCells()]
-
-    def IntegrationCells(self):
-        branch_cells = np.where(1 - self.c_arrays['Blanking'])[0]
-        _, ids = np.unique(self.c_arrays['GroupIds'][branch_cells], return_index=True)
-        return branch_cells[ids]
-
-    def InletCells(self):
-        integrate = self.IntegrationCells()
-        return integrate[integrate == 0]
-
-    def OutletCells(self):
-        branch_cells = np.where(1 - self.c_arrays['Blanking'])[0]
-        _, ids, counts = np.unique(self.c_arrays['GroupIds'][branch_cells], return_index=True, return_counts=True)
-        return branch_cells[ids[counts == 1]]
-
-    def BranchPoints(self):
-        return np.where(1 - self.p_arrays['CenterlineSectionBifurcation'])
+            # store bifurcation id in array
+            caps[name] = branch
+    return caps
 
 
 def get_time(res_1d, res_3d):
@@ -214,7 +167,7 @@ def get_time(res_1d, res_3d):
     # total simulation times
     # time['time_0d_all'] = res_0d['time']
     # time['1d_all'] = np.arange(0, int(time['3d'][-1] // dt * n_cycle) * dt, dt)
-    time['1d_all'] = np.arange(0, res_1d['pressure'][0].shape[1] + 1)[1:] * dt
+    time['1d_all'] = np.arange(0, res_1d['pressure'][0][0].shape[1] + 1)[1:] * dt
 
     # 3d-time moved to the last full 1d cycle (for interpolation)
     n_cycle_1d = max(1, int(time['1d_all'][-1] // res_3d['time'][-1]))
@@ -223,23 +176,28 @@ def get_time(res_1d, res_3d):
     return time
 
 
-def check_consistency(model_1d, centerline, res_1d, res_3d):
-    # if model_1d.reader.GetNumberOfCells() + 1 != model_1d.reader.GetNumberOfPoints():
-    #     return '1d model connectivity inconsistent'
+def check_consistency(r_oned, r_cent, res_1d, res_3d):
+    n_br_res_1d = len(res_1d['area'].keys())
+    n_br_res_3d = len(res_3d['area'].keys())
+    n_br_geo_1d = np.unique(v2n(r_oned.GetOutput().GetPointData().GetArray('BranchId'))).shape[0]
+    n_br_geo_3d = np.unique(v2n(r_cent.GetOutput().GetPointData().GetArray('BranchId'))).shape[0]
 
-    if not np.array_equal(centerline.InteriorGroups(), model_1d.groups):
-        return '1d model and 3d centerline inconsistent'
+    if n_br_res_1d != n_br_res_3d:
+        return '1d and 3d results incosistent'
 
-    if model_1d.c_arrays['seg_id'].shape[0] != len([*res_1d['flow']]):
-        return '1d model and 1d results incosistent'
+    if n_br_geo_1d + 1 != n_br_geo_3d:
+        return '1d and 3d geometries incosistent'
 
-    if centerline.InteriorGroups().tolist() != [*res_3d['flow']]:
-        return '3d centerline and 3d results inconsistent'
+    if r_oned.GetNumberOfCells() + n_br_geo_1d != r_oned.GetNumberOfPoints():
+        return '1d model connectivity inconsistent'
+
+    if r_cent.GetNumberOfCells() + 1 != r_cent.GetNumberOfPoints():
+        return 'Centerline connectivity inconsistent'
 
     return None
 
 
-def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_groupid):
+def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def):
     if not os.path.exists(f_centerline):
         print('No centerline')
         return None, None
@@ -252,50 +210,68 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_groupid):
     if not os.path.exists(f_res_3d):
         print('No 3d results')
         return None, None
-    if not os.path.exists(f_groupid):
-        print('No outlet file')
+    if not os.path.exists(f_surf):
+        print('No surface file')
         return None, None
 
+    # read results
     res_1d = get_dict(f_res_1d)
     res_3d = load_results_3d(f_res_3d)
 
-    model_1d = OneDModel(f_1d_model, f_groupid)
-    centerline = Centerline(f_centerline)
+    # read geometries
+    r_surf = read_geo(f_surf)
+    r_cent = read_geo(f_centerline)
+    r_oned = read_geo(f_1d_model)
 
-    err = check_consistency(model_1d, centerline, res_1d, res_3d)
+    # extract point and cell arrays from geometries
+    p_oned, c_oned = get_all_arrays(r_oned)
+    p_cent, c_cent = get_all_arrays(r_cent)
+
+    # check inpud data for consistency
+    err = check_consistency(r_oned, r_cent, res_1d, res_3d)
     if err:
         print(err)
-        return None
+        return None, None
+
+    # get map outlet name -> BranchId
+    caps = get_map(r_surf.GetOutput(), r_cent.GetOutput(), bc_def)
 
     # simulation time steps
     time = get_time(res_1d, res_3d)
 
-    # 1d-coordinates for points along centerline
-    path_1d = model_1d.get_seg_array('path')
-    branch = centerline.branch()
-    area = centerline.get_group_array('CenterlineSectionArea')
-
+    # loop outlets
     res = {}
-    for c, v in model_1d.caps.items():
+    for c, br in caps.items():
         res[c] = {}
+
+        # 1d-path along branch (real length units)
+        path_1d = p_oned['Path'][p_oned['BranchId'] == br]
+        path_3d = p_cent['Path'][p_cent['BranchId'] == br]
+
+        # loop result fields
         for f in ['flow', 'pressure', 'area']:
             res[c][f] = {}
             res[c][f]['1d_int'] = []
 
-            # 1d interior results (loop through group segments)
+            # 1d interior results (loop through branch segments)
             res[c]['1d_path'] = []
-            for i, s in enumerate(v['SegId']):
+
+            assert path_1d.shape[0] == len(res_1d[f][br]) + 1, '1d model and 1d model do not match'
+
+            for seg, res_1d_seg in sorted(res_1d[f][br].items()):
                 # 1d results are duplicate at FE-nodes at corners of segments
-                if i == 0:
+                if seg == 0:
+                    # start with first FE-node
                     i_start = 0
                 else:
+                    # skip first FE-node (equal to last FE-node of previous segment)
                     i_start = 1
 
                 # generate path for segment FEs, assuming equidistant spacing
-                p0 = path_1d[s][0]
-                p1 = path_1d[s][1]
-                res[c]['1d_path'] += np.linspace(p0, p1, res_1d[f][s].shape[0])[i_start:].tolist()
-                res[c][f]['1d_int'] += res_1d[f][s][i_start:].tolist()
+                p0 = path_1d[seg]
+                p1 = path_1d[seg + 1]
+                res[c]['1d_path'] += np.linspace(p0, p1, res_1d_seg.shape[0])[i_start:].tolist()
+                res[c][f]['1d_int'] += res_1d_seg[i_start:].tolist()
 
             res[c]['1d_path'] = np.array(res[c]['1d_path'])
             res[c][f]['1d_int'] = np.array(res[c][f]['1d_int'])
@@ -306,9 +282,8 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_groupid):
                 i_cap = -1
 
             # 3d interior results
-            g = v['GroupId']
-            res[c]['3d_path'] = centerline.path()[g][branch[g]]
-            res[c][f]['3d_int'] = res_3d[f][g].T[branch[g]]
+            res[c]['3d_path'] = path_3d
+            res[c][f]['3d_int'] = res_3d[f][br].T
 
             # 1d and 3d cap results
             for m in ['1d', '3d']:
@@ -328,13 +303,17 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_groupid):
 
 
 def collect_results_db(db, geo):
+    # get paths
     f_res_1d = db.get_1d_flow_path(geo)
-    f_res_3d = db.get_3d_flow_path(geo)
+    f_res_3d = db.get_3d_flow_path_oned_vtp(geo)
     f_1d_model = db.get_1d_geo(geo)
-    f_centerline = db.get_centerline_path(geo)
-    f_groupid = db.get_groupid_path(geo)
+    f_centerline = db.get_centerline_path_oned(geo)
+    f_surf = db.get_surfaces(geo, 'all_exterior')
 
-    return collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_groupid)
+    # get bcs
+    bc_def, _ = db.get_bcs(geo)
+
+    return collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def)
 
 
 def main(db, geometries):
