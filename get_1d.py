@@ -13,8 +13,7 @@ import argparse
 
 import numpy as np
 
-from common import input_args
-from get_database import Database, SimVascular, Post
+from get_database import Database, SimVascular, Post, input_args
 from get_sim import write_bc
 from simulation_io import read_results_1d
 
@@ -31,14 +30,14 @@ def generate_1d(db, geo):
 
     # sub-segment size
     seg_min_num = 1
-    seg_size = 1
+    seg_size = 999
 
     # FEM size
     min_num_elems = 10
     element_size = 0.1
 
     # mesh adaptive?
-    seg_size_adaptive = True
+    seg_size_adaptive = False
 
     # set simulation paths and create folders
     fpath_1d = db.get_solve_dir_1d(geo)
@@ -65,10 +64,18 @@ def generate_1d(db, geo):
     elif n_inlet > 1:
         return '3d geometry has multiple inlets (' + repr(n_inlet) + ')'
 
+    # assume pre-computed centerlines from SimVascular C++ (don't use python vmtk interfance)
+    centerlines_input_file = db.get_centerline_path_oned(geo)
+    if not os.path.exists(centerlines_input_file):
+        return 'centerline does not exist'
+
     # write outlet boundary conditions to file if they exist
     fpath_outlet_bcs, err = write_bc(fpath_1d, db, geo)
     if err:
         return err
+
+    # get simulation constants
+    constants = db.get_constants(geo)
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
@@ -78,19 +85,9 @@ def generate_1d(db, geo):
     for f in db.get_surfaces(geo, 'caps'):
         shutil.copy2(f, fpath_surf)
 
-    # compute centerlines only if they don't already exist
-    centerlines_output_file = db.get_centerline_path(geo)
-    compute_centerlines = not os.path.exists(centerlines_output_file)
-    if compute_centerlines:
-        centerlines_input_file = None
-    else:
-        centerlines_input_file = centerlines_output_file
-
-    # write outlet names to file
+    # copy outlet names
     fpath_outlets = os.path.join(fpath_1d, 'outlets')
-    with open(fpath_outlets, 'w+') as f:
-        for s in db.get_outlet_names(geo):
-            f.write(s + '\n')
+    shutil.copy2(db.get_centerline_outlet_path(geo), fpath_outlets)
 
     # read inflow conditions
     flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
@@ -125,12 +122,13 @@ def generate_1d(db, geo):
     # num_dts = int(flow['time'][0] / dt + 1.0)
 
     try:
+    # if True:
         oned.run(boundary_surfaces_directory=fpath_surf,
                  centerlines_input_file=centerlines_input_file,
-                 centerlines_output_file=centerlines_output_file,
-                 compute_centerlines=compute_centerlines,
+                 centerlines_output_file=None,
+                 compute_centerlines=False,
                  compute_mesh=True,
-                 density=None,
+                 density=constants['density'],
                  element_size=element_size,
                  inlet_face_input_file='inflow.vtp',
                  inflow_input_file=os.path.join(fpath_1d, 'inflow.flow'),
@@ -158,13 +156,13 @@ def generate_1d(db, geo):
                  surface_model=os.path.join(fpath_geo, 'all_exterior.vtp'),
                  time_step=dt,
                  uniform_bc=True,
-                 units=None,
-                 viscosity=None,
+                 units='cm',
+                 viscosity=constants['viscosity'],
                  wall_properties_input_file=None,
                  wall_properties_output_file=None,
                  write_mesh_file=True,
                  write_solver_file=True)
-    except (IndexError, KeyError, ZeroDivisionError, RuntimeError) as e:
+    except Exception as e:
         return repr(e)
 
     return None
@@ -182,13 +180,12 @@ def main(db, geometries):
         #     continue
 
         # generate oneDSolver input file and check if successful
-        # msg = generate_1d(db, geo)
+        msg = generate_1d(db, geo)
 
-        success_gen = True
-        msg = None
+        # msg = None
         if not msg:
             # run oneDSolver
-            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
             # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
             #     f.write(out_solve)
 
