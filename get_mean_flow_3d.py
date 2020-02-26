@@ -3,100 +3,64 @@ import vtk
 import os
 import pdb
 import scipy
+import meshio
 import argparse
 import numpy as np
 
+from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
+from numpy import array2string as a2s
+from scipy.spatial import KDTree
 
-from common import input_args
 from get_bc_integrals import get_res_names
-from get_database import Database
-from vtk_functions import read_geo, threshold, calculator, cut_plane, connectivity, Integration
+from get_database import Database, input_args
+from vtk_functions import read_geo, write_geo, calculator, cut_plane, connectivity, get_points_cells, clean, Integration
+
+import matplotlib.pyplot as plt
 
 
-def sort_faces(res_faces, area, path):
+def slice_vessel(inp_3d, origin, normal):
     """
-    Arrange results from surface integration in matrix
+    Slice 3d geometry at certain plane
     Args:
-        res_faces: dictionary with key: segment id, value: result at a certain time step
-        area: cross-sectional area of each segment
-        path: one-dimensional path coordinate
-
-    Returns:
-        dictionary with results as keys and matrix at all surfaces/time steps as values
-    """
-    # get time steps
-    times = np.unique([float(k.split('_')[1]) for v in res_faces.values() for k in v.keys()])
-
-    # solution fields
-    fields = np.unique([k.split('_')[0] for v in res_faces.values() for k in v.keys()])
-    fields = np.append(fields, 'area')
-
-    # initialize
-    res = {'time': times, 'path': np.zeros(len(res_faces))}
-    for f in fields:
-        res[f] = np.zeros((times.shape[0], len(res_faces)))
-
-    for k, v in res_faces.items():
-        # constant area for all time steps
-        res['area'][:, k] = area[k]
-
-        # path coordinate
-        res['path'][k] = path[k]
-
-        # sort time steps
-        for r_name, r in v.items():
-            name, time = r_name.split('_')
-            res[name][float(time) == times, k] = r
-
-    return res
-
-
-def get_integral(inp, origin, normal):
-    """
-    Slice simulation at certain plane and integrate
-    Args:
-        inp: vtk InputConnection
+        inp_1d: vtk InputConnection for 1d centerline
+        inp_3d: vtk InputConnection for 3d volume model
         origin: plane origin
         normal: plane normal
 
     Returns:
         Integration object
     """
-    # cut geometry
-    cut = cut_plane(inp, origin, normal)
+    # cut 3d geometry
+    cut_3d = cut_plane(inp_3d, origin, normal)
 
-    # extract region closest to centerline if there are several slices
-    con = connectivity(cut, origin)
+    # extract region closest to centerline
+    con = connectivity(cut_3d, origin)
 
-    # recursively add calculators for normal velocities
-    calc = con
-    for v in get_res_names(inp, 'velocity'):
-        fun = '(iHat*'+repr(normal[0])+'+jHat*'+repr(normal[1])+'+kHat*'+repr(normal[2])+').' + v
-        calc = calculator(calc, fun, [v], 'normal_' + v)
-
-    return Integration(calc)
+    return con
 
 
-def norm_row(x):
+def get_integral(inp_3d, origin, normal):
     """
-    Normalize each row of a matrix
+    Slice simulation at certain plane and integrate
     Args:
-        x: vector or matrix
+        inp_1d: vtk InputConnection for 1d centerline
+        inp_3d: vtk InputConnection for 3d volume model
+        origin: plane origin
+        normal: plane normal
 
     Returns:
-        normalized vector/matrix
+        Integration object
     """
-    # length of each row
-    length = np.sum(np.abs(x)**2, axis=-1)**(1./2)
+    # slice vessel at given location
+    inp = slice_vessel(inp_3d, origin, normal)
 
-    # x is vector, length is scalar
-    if not length.shape:
-        return x / length
+    # recursively add calculators for normal velocities
+    for v in get_res_names(inp_3d, 'velocity'):
+        fun = '(iHat*'+repr(normal[0])+'+jHat*'+repr(normal[1])+'+kHat*'+repr(normal[2])+').' + v
+        inp = calculator(inp, fun, [v], 'normal_' + v)
 
-    # x is matrix, length is vector
-    else:
-        return x / length[:, np.newaxis]
+    return Integration(inp)
 
 
 def extract_results(fpath_1d, fpath_3d):
@@ -112,52 +76,54 @@ def extract_results(fpath_1d, fpath_3d):
     if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
         return None
 
-    # fields to extract
-    res_fields = ['pressure', 'velocity']
-
     # read 1d and 3d model
-    reader_1d, _, _ = read_geo(fpath_1d)
-    reader_3d, _, _ = read_geo(fpath_3d)
+    reader_1d = read_geo(fpath_1d)
+    reader_3d = read_geo(fpath_3d)
 
     # get all result array names
-    res_names = get_res_names(reader_3d, res_fields)
+    res_names = get_res_names(reader_3d, ['pressure', 'velocity'])
 
-    # number of points in model
-    n_point = reader_1d.GetOutput().GetNumberOfPoints()
-    n_cell = reader_1d.GetOutput().GetNumberOfCells()
-    assert n_point == n_cell + 1, 'geometry inconsistent'
+    # solution fields
+    fields = np.unique([k.split('_')[0] for k in res_names]).tolist()
+    fields += ['area']
 
+    # get point and normals from centerline
     points = v2n(reader_1d.GetOutput().GetPoints().GetData())
-    normals = v2n(reader_1d.GetOutput().GetPointData().GetArray('normals'))
-    path_1d = v2n(reader_1d.GetOutput().GetPointData().GetArray('path'))
-    seg_id = v2n(reader_1d.GetOutput().GetCellData().GetArray('seg_id'))
+    normals = v2n(reader_1d.GetOutput().GetPointData().GetArray('CenterlineSectionNormal'))
 
-    # integrate results on each point
-    res = {}
-    area = {}
-    path = {}
-    for i in range(n_cell):
-        # id of vessel segment
-        s = seg_id[i]
+    # initialize output
+    for name in res_names + ['area']:
+        array = vtk.vtkDoubleArray()
+        array.SetName(name)
+        array.SetNumberOfValues(reader_1d.GetOutput().GetNumberOfPoints())
+        array.Fill(0)
+        reader_1d.GetOutput().GetPointData().AddArray(array)
 
-        # id of down-stream node of cell
-        p = reader_1d.GetOutput().GetCell(i).GetPointId(1)
+    # move points on caps slightly to ensure nice integration
+    ids = vtk.vtkIdList()
+    eps_norm = 1.0e-3
+
+    # integrate results on all points of intergration cells
+    for i in range(reader_1d.GetOutput().GetNumberOfPoints()):
+        # check if point is cap
+        reader_1d.GetOutput().GetPointCells(i, ids)
+        if ids.GetNumberOfIds() == 1:
+            if i == 0:
+                # inlet
+                points[i] += eps_norm * normals[i]
+            else:
+                # outlets
+                points[i] -= eps_norm * normals[i]
 
         # create integration object (slice geometry at point/normal)
-        integral = get_integral(reader_3d, points[p], normals[p])
+        integral = get_integral(reader_3d, points[i], normals[i])
 
         # integrate all output arrays
-        res[s] = {}
-        for r in res_names:
-            res[s][r] = integral.evaluate(r)
+        for name in res_names:
+            reader_1d.GetOutput().GetPointData().GetArray(name).SetValue(i, integral.evaluate(name))
+        reader_1d.GetOutput().GetPointData().GetArray('area').SetValue(i, integral.area())
 
-        # store cross-sectional area
-        area[s] = integral.area()
-
-        # store path coordinate
-        path[s] = path_1d[p]
-
-    return sort_faces(res, area, path)
+    return reader_1d
 
 
 def main(db, geometries):
@@ -167,24 +133,18 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        fpath_1d = db.get_1d_geo(geo)
+        fpath_1d = db.get_centerline_path_oned(geo)
         fpath_3d = db.get_volume(geo)
-
-        if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
-            continue
-
-        if os.path.exists(db.get_3d_flow_path(geo)):
-            continue
 
         # extract 3d results integrated over cross-section
         try:
             res = extract_results(fpath_1d, fpath_3d)
-
-            # save to file
-            if res is not None:
-                np.save(db.get_3d_flow_path(geo), res)
-        except:
+        except Exception as e:
+            print(e)
             continue
+
+        if res is not None:
+            write_geo(db.get_3d_flow_path_oned_vtp(geo), res)
 
 
 if __name__ == '__main__':
