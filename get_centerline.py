@@ -6,12 +6,14 @@ import pdb
 import shutil
 import subprocess
 import tempfile
+import vtk
 
 from collections import OrderedDict
 import numpy as np
 
 from get_database import Database, SimVascular, input_args
-from vtk_functions import ClosestPoints
+from vtk_functions import ClosestPoints, read_geo, write_geo
+from vmtk import vtkvmtk, vmtkscripts
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
@@ -22,9 +24,12 @@ class Params(object):
     """
     Minimal parameter set for get_inlet_outlet_centers function in Centerlines class
     """
-    def __init__(self, surf_dir, inflow):
+    def __init__(self, surf_dir, inflow, surf):
         self.boundary_surfaces_dir = surf_dir
         self.inlet_face_input_file = inflow
+        self.surface_model = surf
+        self.output_directory = '/home/pfaller'
+        self.CENTERLINES_OUTLET_FILE_NAME = 'bla'
 
 
 def main(db, geometries):
@@ -40,15 +45,12 @@ def main(db, geometries):
         if not db.get_surfaces(geo, 'all_exterior'):
             continue
 
-        # if os.path.exists(db.get_section_path(geo)):
-        #     continue
-
         # get model paths
         p = OrderedDict()
-        p['surf'] = db.get_surfaces(geo, 'all_exterior')
-        p['lines'] = db.get_centerline_path(geo)
+        p['surf_in'] = db.get_surfaces(geo, 'all_exterior')
+        p['surf_out'] = db.get_surfaces_grouped_path(geo)
         p['sections'] = db.get_section_path(geo)
-        p['surf_grouped'] = db.get_surfaces_grouped_path(geo)
+        p['cent'] = db.get_centerline_path(geo)
 
         # copy cap surfaces to temp folder
         fpath_surf = tempfile.mkdtemp()
@@ -56,33 +58,31 @@ def main(db, geometries):
             shutil.copy2(f, fpath_surf)
 
         # get inlet and outlet centers
-        params = Params(fpath_surf, os.path.basename(db.get_surfaces(geo, 'inflow')))
+        params = Params(fpath_surf, os.path.basename(db.get_surfaces(geo, 'inflow')), p['surf_in'])
         cl.get_inlet_outlet_centers(params)
 
-        # remove temp dir
-        shutil.rmtree(fpath_surf)
-
         # find corresponding point id
-        cp = ClosestPoints(p['surf'])
+        cp = ClosestPoints(p['surf_in'])
         caps = np.vstack((cl.inlet_center, np.array(cl.outlet_centers).reshape(-1, 3)))
         id_caps = cp.search(caps)
 
-        # convert for export
         p['caps'] = repr(id_caps).replace(' ', '')
-
-        # assemble call string
-        sv_string = [os.path.join(os.getcwd(), 'get_centerline_sv.py')]
-        for v in p.values():
-            sv_string += [v]
 
         # write outlet names to file
         with open(db.get_centerline_outlet_path(geo), 'w+') as f:
             for s in cl.outlet_face_names:
                 f.write(s + '\n')
 
+        # assemble call string
+        sv_string = [os.path.join(os.getcwd(), 'get_centerline_sv.py')]
+        for v in p.values():
+            sv_string += [v]
+
         # execute SimVascular-Python
         sv.run_python(sv_string)
-        # sv.run_python_debug(sv_string)
+
+        # remove temp dir
+        shutil.rmtree(fpath_surf)
 
 
 if __name__ == '__main__':
