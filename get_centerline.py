@@ -74,7 +74,7 @@ def main(db, geometries):
                 f.write(s + '\n')
 
         # assemble call string
-        sv_string = [os.path.join(os.getcwd(), 'get_centerline_sv.py')]
+        sv_string = [os.path.join(os.getcwd(), 'sv_get_centerline.py')]
         for v in p.values():
             sv_string += [v]
 
