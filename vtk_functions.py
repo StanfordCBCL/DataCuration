@@ -71,7 +71,7 @@ class ClosestPoints:
     """
     def __init__(self, inp):
         if isinstance(inp, str):
-            geo, _, _ = read_geo(inp)
+            geo = read_geo(inp)
             inp = geo.GetOutput()
         dataset = vtk.vtkPolyData()
         dataset.SetPoints(inp.GetPoints())
@@ -137,12 +137,11 @@ def read_geo(fname):
     return reader
 
 
-def write_geo(fname, reader):
+def write_geo(fname, input):
     """
     Write geometry to file
     Args:
         fname: file name
-        reader: vtkXMLPolyData
     """
     _, ext = os.path.splitext(fname)
     if ext == '.vtp':
@@ -152,7 +151,7 @@ def write_geo(fname, reader):
     else:
         raise ValueError('File extension ' + ext + ' unknown.')
     writer.SetFileName(fname)
-    writer.SetInputConnection(reader.GetOutputPort(0))
+    writer.SetInputData(input)
     writer.Update()
     writer.Write()
 
@@ -223,12 +222,12 @@ def cut_plane(inp, origin, normal):
 
 def get_points_cells(inp):
     cells = []
-    for i in range(res.GetOutput().GetNumberOfCells()):
+    for i in range(inp.GetOutput().GetNumberOfCells()):
         cell_points = []
-        for j in range(res.GetOutput().GetCell(i).GetNumberOfPoints()):
-            cell_points += [res.GetOutput().GetCell(i).GetPointId(j)]
+        for j in range(inp.GetOutput().GetCell(i).GetNumberOfPoints()):
+            cell_points += [inp.GetOutput().GetCell(i).GetPointId(j)]
         cells += [cell_points]
-    return v2n(res.GetOutput().GetPoints().GetData()), np.array(cells)
+    return v2n(inp.GetOutput().GetPoints().GetData()), np.array(cells)
 
 
 def connectivity(inp, origin):
@@ -284,11 +283,11 @@ def clean(inp):
     Merge duplicate Points
     """
     cleaner = vtk.vtkCleanPolyData()
-    cleaner.SetInputData(inp.GetOutput())
+    cleaner.SetInputData(inp)
     # cleaner.SetTolerance(1.0e-3)
     cleaner.PointMergingOn()
     cleaner.Update()
-    return cleaner
+    return cleaner.GetOutput()
 
 
 def scalar_array(length, name, fill):
@@ -324,3 +323,65 @@ def replace(inp, name, array):
     arr.SetName(name)
     inp.GetOutput().GetCellData().RemoveArray(name)
     inp.GetOutput().GetCellData().AddArray(arr)
+
+
+def geo(inp):
+    poly = vtk.vtkGeometryFilter()
+    poly.SetInputData(inp)
+    poly.Update()
+    return poly.GetOutput()
+
+
+def region_grow(geo, seed, array, n_max=99999):
+    pids_all = vtk.vtkIdList()
+    cids_all = vtk.vtkIdList()
+
+    pids = vtk.vtkIdList()
+    for s in seed:
+        pids.InsertUniqueId(s)
+        pids_all.InsertUniqueId(s)
+
+    n_ids_old = -1
+    n_ids_new = 0
+    i = 0
+    # loop until region stops growing or reaches maximum number of iterations
+    while n_ids_old != n_ids_new and i < n_max:
+        # grow region one cell outwards
+        pids = grow(geo, array, pids, pids_all, cids_all)
+
+        n_ids_old = n_ids_new
+        n_ids_new = pids_all.GetNumberOfIds()
+        i += 1
+
+    return [pids_all.GetId(k) for k in range(pids_all.GetNumberOfIds())]
+
+
+def grow(geo, array, pids_in, pids_all, cids_all):
+    # ids of propagating wave-front
+    pids_out = vtk.vtkIdList()
+
+    # loop all points in wave-front
+    for i in range(pids_in.GetNumberOfIds()):
+        cids = vtk.vtkIdList()
+        geo.GetPointCells(pids_in.GetId(i), cids)
+
+        # get all connected cells in wave-front
+        for j in range(cids.GetNumberOfIds()):
+            # skip cells that are already in region
+            if cids_all.IsId(cids.GetId(j)) != -1:
+                continue
+            else:
+                cids_all.InsertUniqueId(cids.GetId(j))
+            
+            pids = vtk.vtkIdList()
+            geo.GetCellPoints(cids.GetId(j), pids)
+
+            # loop all points in cell
+            for k in range(pids.GetNumberOfIds()):
+
+                # add point oonly if it's new and doesn't fullfill stopping criterion
+                if array[pids.GetId(k)] == -1 and pids_in.IsId(pids.GetId(k)) == -1:
+                    pids_out.InsertUniqueId(pids.GetId(k))
+                    pids_all.InsertUniqueId(pids.GetId(k))
+
+    return pids_out
