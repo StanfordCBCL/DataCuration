@@ -237,7 +237,7 @@ def calc_error(db, opt, geo, res, time):
     caps = db.get_surface_names(geo, 'caps')
 
     # remove inflow (prescribed flow)
-    del caps['inflow']
+    caps.remove('inflow')
 
     # all differences over time
     delta = {}
@@ -251,15 +251,15 @@ def calc_error(db, opt, geo, res, time):
             # res_3d = interp(res['path'][c]['1d'])
 
             # interpolate 1d results to 3d path
-            interp = scipy.interpolate.interp1d(res['path'][c]['1d'], res[c][f]['1d_int'])
-            res_1d = interp(res['path'][c]['3d'])
+            interp = scipy.interpolate.interp1d(res[c]['1d_path'], res[c][f]['1d_int'].T)
+            res_1d = interp(res[c]['3d_path'])
 
             # difference in interior
             # delta[f][c]['int'] = np.linalg.norm(res_3d - res[c][f]['1d_int'], axis=1) * post.convert[f]
-            delta[f][c]['int'] = np.linalg.norm(res_1d - res[c][f]['3d_int'], axis=1) * post.convert[f]
+            delta[f][c]['int'] = np.linalg.norm(res_1d - res[c][f]['3d_int'].T, axis=1) * post.convert[f]
 
             # difference at caps
-            delta[f][c]['caps'] = (res[c][f]['3d'] - res[c][f]['1d']) * post.convert[f]
+            delta[f][c]['caps'] = (res[c][f]['3d_cap'] - res[c][f]['1d_cap']) * post.convert[f]
 
     # mean/max difference over time
     err = {}
@@ -276,8 +276,8 @@ def calc_error(db, opt, geo, res, time):
         err[f]['all'] = {}
         for name in delta[f][c].keys():
             err[f]['all'][name] = {}
-            err[f]['all'][name]['max'] = np.max([err[f][c][name]['max'] for c in caps.keys()])
-            err[f]['all'][name]['mean'] = np.mean([err[f][c][name]['mean'] for c in caps.keys()])
+            err[f]['all'][name]['max'] = np.max([err[f][c][name]['max'] for c in caps])
+            err[f]['all'][name]['mean'] = np.mean([err[f][c][name]['mean'] for c in caps])
 
     db.add_1d_3d_comparison(geo, err)
 
@@ -301,16 +301,13 @@ def main(db, geometries):
                'h': 2 * (len(Post().fields) * 1 + 1)}
 
         # calculate error
-        # calc_error(db, opt, geo, res, time)
+        calc_error(db, opt, geo, res, time)
 
         # generate plots
         print('plotting')
-        # try:
         plot_1d_3d_all(db, opt, geo, res, time)
         plot_1d_3d_caps(db, opt, geo, res, time)
         plot_1d_3d_interior(db, opt, geo, res, time)
-        # except:
-        #     pass
 
         # plot_1d_3d_paper(db, opt, geo, res, time)
 
