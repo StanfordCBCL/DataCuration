@@ -162,7 +162,7 @@ def clean_bifurcation(centerline):
         # remove branch (convert to bifurcation)
         if t.GetNumberOfPoints() == 1:
             t_p_id = t.GetPointData().GetArray('GlobalNodeID')
-            bf.SetValue(t_p_id.GetValue(j), 1)
+            bf.SetValue(t_p_id.GetValue(0), 1)
 
 
 def split_centerline(centerline):
@@ -242,18 +242,20 @@ def transfer_arrays(src, trg):
         # get source array
         array_src = src.GetPointData().GetArray(a)
 
+        n_val = array_src.GetNumberOfComponents()
+
         # setup target array
         array_trg = vtk.vtkDoubleArray()
         array_trg.SetName(array_src.GetName())
-        array_trg.SetNumberOfComponents(array_src.GetNumberOfComponents())
-        array_trg.SetNumberOfValues(array_src.GetNumberOfValues())
+        array_trg.SetNumberOfComponents(n_val)
+        array_trg.SetNumberOfValues(trg.GetNumberOfPoints() * n_val)
 
         # copy array values using point map
         for i, j in enumerate(ids):
             val = array_src.GetTuple(j)
-            if len(val) == 1:
+            if n_val == 1:
                 array_trg.SetValue(i, val[0])
-            elif len(val) == 3:
+            elif n_val == 3:
                 array_trg.SetTuple3(i, val[0], val[1], val[2])
             else:
                 raise ValueError('Not implemented')
@@ -261,7 +263,111 @@ def transfer_arrays(src, trg):
         trg.GetPointData().AddArray(array_trg)
 
 
-def get_model(fpath_cent_raw, fpath_cent_sections):
+def group_surface(cent_clean, fpath_surf):
+    surf = read_geo(fpath_surf)
+
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputData(surf.GetOutput())
+    normals.SplittingOff()
+    normals.AutoOrientNormalsOn()
+    normals.ConsistencyOn()
+    normals.FlipNormalsOn()
+    normals.Update()
+
+    normal = v2n(normals.GetOutput().GetPointData().GetNormals())
+    radius = v2n(cent_clean.GetPointData().GetArray('MaximumInscribedSphereRadius'))
+    branch = v2n(cent_clean.GetPointData().GetArray('BranchId'))
+    points_cent = v2n(cent_clean.GetPoints().GetData())
+    points_surf = v2n(surf.GetOutput().GetPoints().GetData())
+
+    r_max = np.max(radius)
+
+    tree_cent = scipy.spatial.KDTree(points_cent)
+
+    array = vtk.vtkIntArray()
+    array.SetName('BranchId')
+    array.SetNumberOfValues(surf.GetOutput().GetNumberOfPoints())
+
+    # loop all points in surface (this is very expensive)
+    for i, (p, n) in enumerate(zip(points_surf, normal)):
+        # get centerline points within sphere (this could possibly be made smaller)
+        # todo: speedup be using query_ball_tree ??
+        ids = tree_cent.query_ball_point(p, 2 * r_max)
+
+        # vector from surface point to centerline points
+        vec = points_cent[ids] - p
+
+        # signed distance in inward normal direction
+        dist_n = np.dot(vec, n)
+        vec_n = np.outer(dist_n, n)
+        vec_p = vec - vec_n
+
+        # distance perpendicular to normal direction (i.e. parallel to centerline)
+        dist_p = np.linalg.norm(vec_p, axis=1)
+
+        dist_m = abs(dist_p) + abs(dist_n)
+
+        # dist = np.sqrt(dist_p**2 + dist_n**2)
+
+        # only choose from centerline points inside surface
+        i_inside = np.where((dist_n > 0) * (dist_n < 2 * radius[ids]))[0]
+        # if not np.any(i_inside):
+        #     pdb.set_trace()
+
+        # choose closest point
+        # j = np.argmin(dist[i_inside])
+
+        # choose point with biggest radius
+        # j = np.argmax(radius[i_inside])
+
+        n_min = 3
+        close = np.argpartition(dist_p[i_inside], n_min)[:n_min]
+
+        # j = np.argmax(radius[i_inside[close]])
+        # j = np.argmin(dist_n[i_inside[close]])
+        # j = np.argmin(dist_m[i_inside])
+
+        dist_p_min = 1e16
+        dist_n_min = 1e16
+        for k in range(i_inside.shape[0]):
+            if dist_p[i_inside[k]] < dist_p_min + 0.1 and dist_n[k] < dist_n_min:
+                j = k
+                dist_p_min = dist_p[i_inside[k]]
+                dist_n_min = dist_n[i_inside[k]]
+                # print(dist_p_min)
+        # pdb.set_trace()
+
+        # if np.unique(branch[np.array(ids)[i_inside[close]]]).shape[0] > 1:
+        if i == 4946:
+            print(i)
+            import matplotlib.pyplot as plt
+            # plt.scatter(dist_p, dist_n, c=(dist - dist.min()) / (dist.max() - dist.min()))
+            plt.scatter(dist_p[i_inside], dist_n[i_inside], c=branch[np.array(ids)[i_inside]])
+            # plt.plot(dist_p[i_inside[close[j]]], dist_n[i_inside[close[j]]], 'rx')
+            plt.plot(dist_p[i_inside[j]], dist_n[i_inside[j]], 'rx')
+            plt.show()
+            pdb.set_trace()
+
+        try:
+            # array.SetValue(i, int(branch[ids[i_inside[close[j]]]]))
+            array.SetValue(i, int(branch[ids[i_inside[j]]]))
+        except Exception:
+            pdb.set_trace()
+    #
+    # tree_surf = scipy.spatial.KDTree(points_surf)
+    #
+    # pdb.set_trace()
+    #
+    # for i, (p, r) in enumerate(zip(points_cent, radius)):
+    #     ids = tree_surf.query_ball_point(p, 2 * r)
+    #
+    #     for j in ids:
+    #         array.SetValue(j, cent_clean.GetPointData().GetArray('BranchId').GetValue(i))
+    surf.GetOutput().GetPointData().AddArray(array)
+    return surf
+
+
+def get_model(fpath_cent_raw, fpath_cent_sections, fpath_surf):
     # read raw centerline from file
     cent_raw = read_geo(fpath_cent_raw)
 
@@ -282,24 +388,32 @@ def get_model(fpath_cent_raw, fpath_cent_sections):
     # split centerline
     cent_split = group_centerline(cent_clean)
 
-    return cent_split
+    # WIP
+    surf_group = group_surface(cent_clean, fpath_surf)
+
+    return cent_split, surf_group
 
 
 def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        if not os.path.exists(db.get_centerline_path(geo)):
+        fpath_cent_raw = db.get_centerline_path_raw(geo)
+        fpath_cent_sections = db.get_centerline_path(geo)
+        fpath_surf = db.get_surfaces(geo, 'all_exterior')
+
+        if not os.path.exists(fpath_cent_raw) or not os.path.exists(fpath_cent_sections):
             print('  no centerline')
             continue
 
-        try:
-            mesh = get_model(db.get_centerline_path_raw(geo), db.get_centerline_path(geo))
-        except (AssertionError, AttributeError, KeyError, TypeError) as e:
-            print('  ' + str(e))
-            continue
+        # try:
+        mesh_cent, mesh_surf = get_model(fpath_cent_raw, fpath_cent_sections, fpath_surf)
+        # except (AssertionError, AttributeError, KeyError, TypeError) as e:
+        #     print('  ' + str(e))
+        #     continue
 
-        write_geo(db.get_centerline_path_oned(geo), mesh)
+        write_geo(db.get_centerline_path_oned(geo), mesh_cent)
+        write_geo(db.get_surfaces_grouped_path_oned(geo), mesh_surf)
 
 
 if __name__ == '__main__':
