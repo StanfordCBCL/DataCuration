@@ -146,7 +146,11 @@ class Database:
         imaging = ['0001', '0020', '0044']
         animals = ['0066', '0067', '0068', '0069', '0070', '0071', '0072', '0073', '0074']
         single_vessel = ['0158', '0164', '0165']
-        exclude = imaging + animals + single_vessel
+
+        # temporary: wrong integration due to displaced volumetric geometry
+        error = ['0091', '0092', '0154']
+
+        exclude = imaging + animals + single_vessel + error
 
         geometries = []
         for g in geometries_in:
@@ -175,6 +179,10 @@ class Database:
             geometries = ['0140_2001', '0144_1001', '0147_1001', '0160_6001', '0161_0001', '0162_3001', '0163_0001']
         elif name == 'fix_surf_discr':
             geometries = ['0069_0001', '0164_0001']
+        elif name == 'fix_surf_displacement':
+            geometries = ['0065_0001', '0065_1001', '0065_2001', '0065_3001', '0065_4001', '0078_0001', '0079_0001',
+                          '0091_0001', '0091_2001', '0092_0001', '0108_0001', '0154_0001', '0154_1001', '0165_0001',
+                          '0166_0001', '0183_1002', '0187_0002']
         else:
             raise Exception('Unknown selection ' + name)
         return geometries
@@ -417,6 +425,19 @@ class Database:
             if 'inflow' in s:
                 n_inlet += 1
         return n_inlet
+
+    def read_results(self, fpath):
+        if os.path.exists(fpath):
+            res = np.load(fpath, allow_pickle=True).item()
+        else:
+            print('no results in ' + fpath)
+            return None
+
+        if 'pressure' not in res or len(res['pressure']) == 0:
+            print('results empty in ' + fpath)
+            return None
+
+        return res
 
     def get_constants(self, geo):
         # get simulation parameters
