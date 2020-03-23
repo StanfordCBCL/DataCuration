@@ -118,40 +118,6 @@ def load_results_3d(f_res_3d):
     return out
 
 
-def get_map(surf, centerline, bc_def):
-    # map BC_FaceID -> outlet name
-    bc_face_id = {}
-    for k, i in bc_def['spid'].items():
-        if k != 'wall':
-            bc_face_id[int(i)] = k
-
-    # cell data to point data to have BC_FaceID on points
-    surf_point = vtk.vtkCellDataToPointData()
-    surf_point.SetInputData(surf)
-    surf_point.Update()
-
-    # search tree for surface points
-    tree = scipy.spatial.KDTree(v2n(surf.GetPoints().GetData()))
-    ids = vtk.vtkIdList()
-
-    # map outlet name -> BranchId
-    caps = {}
-    for p in range(centerline.GetNumberOfPoints()):
-        centerline.GetPointCells(p, ids)
-        n_ids = ids.GetNumberOfIds()
-        if n_ids == 1:
-            # get closest point in surface
-            dist, i = tree.query(centerline.GetPoint(p))
-            assert dist < 1.0e-14, 'centerline does not coincide with surface mesh'
-
-            name = bc_face_id[surf_point.GetOutput().GetPointData().GetArray('BC_FaceID').GetValue(i)]
-            branch = centerline.GetPointData().GetArray('BranchId').GetValue(p)
-
-            # store bifurcation id in array
-            caps[name] = branch
-    return caps
-
-
 def get_time(res_1d, res_3d):
     # time steps
     time = {'3d': res_3d['time'], '3d_all': res_3d['time']}
@@ -176,31 +142,22 @@ def get_time(res_1d, res_3d):
     return time
 
 
-def check_consistency(r_oned, r_cent, res_1d, res_3d):
+def check_consistency(r_oned, res_1d, res_3d):
     n_br_res_1d = len(res_1d['area'].keys())
     n_br_res_3d = len(res_3d['area'].keys())
     n_br_geo_1d = np.unique(v2n(r_oned.GetOutput().GetPointData().GetArray('BranchId'))).shape[0]
-    n_br_geo_3d = np.unique(v2n(r_cent.GetOutput().GetPointData().GetArray('BranchId'))).shape[0]
 
     if n_br_res_1d != n_br_res_3d:
         return '1d and 3d results incosistent'
 
-    if n_br_geo_1d + 1 != n_br_geo_3d:
-        return '1d and 3d geometries incosistent'
-
     if r_oned.GetNumberOfCells() + n_br_geo_1d != r_oned.GetNumberOfPoints():
         return '1d model connectivity inconsistent'
-
-    if r_cent.GetNumberOfCells() + 1 != r_cent.GetNumberOfPoints():
-        return 'Centerline connectivity inconsistent'
 
     return None
 
 
-def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def):
-    if not os.path.exists(f_centerline):
-        print('No centerline')
-        return None, None
+def collect_results(f_res_1d, f_res_3d, f_1d_model, outlets):
+    # todo: merge results into 1d model
     if not os.path.exists(f_1d_model):
         print('No 1d model')
         return None, None
@@ -210,17 +167,13 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def
     if not os.path.exists(f_res_3d):
         print('No 3d results')
         return None, None
-    if not os.path.exists(f_surf):
-        print('No surface file')
-        return None, None
 
     # read results
     res_1d = get_dict(f_res_1d)
     res_3d = load_results_3d(f_res_3d)
 
     # read geometries
-    r_surf = read_geo(f_surf)
-    r_cent = read_geo(f_centerline)
+    r_cent = read_geo(f_res_3d)
     r_oned = read_geo(f_1d_model)
 
     # extract point and cell arrays from geometries
@@ -228,20 +181,18 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def
     p_cent, c_cent = get_all_arrays(r_cent)
 
     # check inpud data for consistency
-    err = check_consistency(r_oned, r_cent, res_1d, res_3d)
+    err = check_consistency(r_oned, res_1d, res_3d)
     if err:
         print(err)
         return None, None
-
-    # get map outlet name -> BranchId
-    caps = get_map(r_surf.GetOutput(), r_cent.GetOutput(), bc_def)
 
     # simulation time steps
     time = get_time(res_1d, res_3d)
 
     # loop outlets
     res = {}
-    for c, br in caps.items():
+    # for c, br in caps.items():
+    for br, c in enumerate(['inflow'] + outlets):
         res[c] = {}
 
         # 1d-path along branch (real length units)
@@ -307,13 +258,11 @@ def collect_results_db(db, geo):
     f_res_1d = db.get_1d_flow_path(geo)
     f_res_3d = db.get_3d_flow_path_oned_vtp(geo)
     f_1d_model = db.get_1d_geo(geo)
-    f_centerline = db.get_centerline_path_oned(geo)
-    f_surf = db.get_surfaces(geo, 'all_exterior')
 
-    # get bcs
-    bc_def, _ = db.get_bcs(geo)
+    # get outlets
+    outlets = db.get_outlet_names(geo)
 
-    return collect_results(f_res_1d, f_res_3d, f_1d_model, f_centerline, f_surf, bc_def)
+    return collect_results(f_res_1d, f_res_3d, f_1d_model, outlets)
 
 
 def main(db, geometries):

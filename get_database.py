@@ -69,6 +69,9 @@ class Database:
         # folder where generated data is saved
         self.fpath_gen = '/home/pfaller/work/osmsc/data_generated'
 
+        # folder for paths and segmentations
+        self.fpath_seg_path = '/home/pfaller/work/osmsc/data_additional/models/'
+
         # folder for simulation studies
         self.fpath_studies = '/home/pfaller/work/osmsc/studies'
 
@@ -225,7 +228,13 @@ class Database:
         return os.path.join(self.fpath_gen, 'centerlines', 'outlets_' + geo)
 
     def get_surfaces_grouped_path(self, geo):
-        return os.path.join(self.fpath_gen, 'surfaces_grouped_uncut', geo + '.vtp')
+        return os.path.join(self.fpath_gen, 'surfaces_grouped', geo + '.vtp')
+
+    def get_surfaces_cut_path(self, geo):
+        return os.path.join(self.fpath_gen, 'surfaces_cut', geo + '.vtu')
+
+    def get_surfaces_grouped_path_oned(self, geo):
+        return os.path.join(self.fpath_gen, 'surfaces_grouped_oned', geo + '.vtp')
 
     def get_centerline_path_1d(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines_from_1d', geo + '.vtp')
@@ -321,6 +330,17 @@ class Database:
     def get_1d_params(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), 'parameters.npy')
 
+    def get_seg_path(self, geo):
+        return os.path.join(self.fpath_seg_path, geo)
+
+    # todo: adapt to units?
+    def get_path_file(self, geo):
+        return os.path.join(self.get_seg_path(geo), geo + '-cm.paths')
+
+    # todo: adapt to units?
+    def get_seg_dir(self, geo):
+        return os.path.join(self.get_seg_path(geo), geo + '_groups-cm', '*')
+
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
         surfaces.append(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', 'extras', 'all_exterior.vtp'))
@@ -331,78 +351,6 @@ class Database:
             if c in k.lower() and k in keys_left:
                 keys_ordered.append(k)
                 keys_left.remove(k)
-
-    def read_centerline(self, fpath):
-        reader_1d, nodes_1d, cells_1d = read_geo(fpath)
-        group = v2n(cells_1d.GetArray('GroupIds'))
-        # group = v2n(cells_1d.GetArray('group'))
-        seg_id = v2n(cells_1d.GetArray('seg_id'))
-        path = v2n(nodes_1d.GetArray('path'))
-
-        grp = np.unique(group)
-        grp_nodes = {}
-        for g in grp:
-            points_group = []
-            for c in np.where(group == g)[0]:
-                for i in range(2):
-                    points_group += [reader_1d.GetOutput().GetCell(c).GetPointId(i)]
-            grp_nodes[g] = np.unique(points_group)
-
-        return group, seg_id, grp_nodes, path
-
-    def get_xd_map(self, geo):
-        # add inlet GroupId
-        caps = {'inflow': {}}
-        caps['inflow']['GroupId'] = 0
-
-        # add outlet GroupIds
-        with open(self.get_groupid_path(geo)) as f:
-            for line in csv.reader(f, delimiter=' '):
-                caps[line[0]] = {}
-                caps[line[0]]['GroupId'] = int(line[2])
-
-        # add inlet/oulet BC_FaceIDs
-        bcs, _ = self.get_bcs(geo)
-        for k in caps.keys():
-            caps[k]['BC_FaceID'] = int(bcs['preid'][k])
-
-        # add inlet/oulet SegIds
-        group, seg_id, grp_nodes, path = self.read_centerline(os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp'))
-        for k in caps.keys():
-            g = group[seg_id == caps[k]['GroupId']][0]
-            # caps[k]['SegId'] = seg_id[group == g]
-            caps[k]['SegId'] = grp_nodes[g]
-            caps[k]['BranchId'] = g
-            caps[k]['path_1d'] = path[caps[k]['SegId']]
-            if not k == 'inflow':
-                caps[k]['path_1d'][0] = 0
-
-        group, seg_id, grp_nodes, path = self.read_centerline(self.get_centerline_path_1d(geo))
-        for k in caps.keys():
-            # caps[k]['SegId_cent'] = seg_id[group == caps[k]['BranchId']]
-            caps[k]['SegId_cent'] = grp_nodes[caps[k]['BranchId']]
-            caps[k]['path_3d'] = path[caps[k]['SegId_cent']]
-            if not k == 'inflow':
-                caps[k]['path_3d'][0] = 0
-
-        # nicely ordered cap names for output
-        keys_left = sorted(caps.keys())
-        keys_ordered = []
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'inflow')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'aorta')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'p_')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'd_')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'left')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'right')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'l_')
-        self.add_cap_ordered(caps, keys_ordered, keys_left, 'r_')
-        keys_ordered += keys_left
-
-        caps_ordered = OrderedDict()
-        for k in keys_ordered:
-            caps_ordered[k] = caps[k]
-
-        return caps_ordered
 
     def get_surfaces(self, geo, surf='all'):
         fdir = self.get_surface_dir(geo)
@@ -507,165 +455,6 @@ class Database:
         fpath_res = os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
         shutil.copy(fpath_res, os.path.join(self.get_solve_dir_3d(geo), 'mesh-complete'))
 
-    def read_results(self, fpath):
-        if os.path.exists(fpath):
-            res = np.load(fpath, allow_pickle=True).item()
-        else:
-            print('no results in ' + fpath)
-            return None
-
-        if 'pressure' not in res or len(res['pressure']) == 0:
-            print('results empty in ' + fpath)
-            return None
-
-        return res
-
-    def get_results_xd(self, geo):
-        # get post-processing object
-        post = Post()
-
-        # read results
-        # res_0d = self.read_results(geo, self.get_0d_flow_path(geo))
-        # if res_0d is None:
-        #     return None, None
-
-        res_1d = self.read_results(self.get_1d_flow_path(geo))
-        if res_1d is None:
-            return None, None
-
-        res_3d_caps = self.read_results(self.get_bc_flow_path(geo))
-        if res_3d_caps is None:
-            return None, None
-
-        res_3d_interior = self.read_results(self.get_3d_flow_path_old(geo))
-        if res_3d_interior is None:
-            return None, None
-
-        # get map between 3d BC_FaceID and 1d GroupId for all inlet/outlets
-        xd_map = self.get_xd_map(geo)
-
-        # rename 3d results
-        res_3d_caps['flow'] = res_3d_caps['velocity']
-        res_3d_interior['flow'] = res_3d_interior['velocity']
-        del res_3d_caps['velocity']
-        del res_3d_interior['velocity']
-
-        # time steps
-        time = {'3d': res_3d_caps['time'],
-                '3d_all': res_3d_caps['time']}
-
-        n_cycle = 10
-        dt = 1e-3
-        step_cycle = int(time['3d'][-1] // dt)
-        tmax = step_cycle * dt
-        time['1d'] = np.arange(0, tmax, dt)
-        time['step_cycle'] = step_cycle
-        time['n_cycle'] = n_cycle
-
-        # total simulation times
-        # time['time_0d_all'] = res_0d['time']
-        # time['1d_all'] = np.arange(0, int(time['3d'][-1] // dt * n_cycle) * dt, dt)
-        time['1d_all'] = np.arange(0, res_1d['pressure'][0].shape[1] + 1)[1:] * dt
-
-        # 3d-time moved to the last full 1d cycle (for interpolation)
-        n_cycle_1d = max(1, int(time['1d_all'][-1] // res_3d_caps['time'][-1]))
-        time_3d_last_1d = res_3d_caps['time'] + (n_cycle_1d - 1) * res_3d_caps['time'][-1]
-
-        # collect results
-        res = {'path': {}}
-        for f in post.fields:
-            res[f] = {}
-            for k, v in xd_map.items():
-
-                # get last element in 1d segment
-                i_1d = -1
-                s_3d = 1
-                if k == 'inflow':
-                    # get first 1d segment
-                    i_1d = 0
-
-                    if f == 'flow':
-                        s_3d = -1
-
-                # assemble simulation results
-                res[f][k] = {}
-                res['path'][k] = {}
-
-                if res_1d is not None:
-                    res['path'][k]['1d'] = np.array([0])
-
-                    # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
-                    res[f][k]['1d_all'] = res_1d[f][v['GroupId']][i_1d]
-
-                    # interpolate 1d results to 3d time steps of last cycle
-                    interp = scipy.interpolate.interp1d(time['1d_all'], res[f][k]['1d_all'], bounds_error=False)
-                    res[f][k]['1d'] = interp(time_3d_last_1d)
-
-                    # interpolate 1d branch in time to 3d
-                    # res[f][k]['1d_int'] = np.zeros((time_3d_last_1d.shape[0], v['SegId'].shape[0]))
-                    # assert res[f][k]['1d_int'].shape == res[f][k]['3d_int'].shape, 'size of 1d and 3d results do not agree'
-
-                    # add inlet FE
-                    res_inflow = res_1d[f][v['SegId'][1] - 1][0]
-                    interp = scipy.interpolate.interp1d(time['1d_all'], res_inflow, bounds_error=False)
-                    res[f][k]['1d_int'] = interp(time_3d_last_1d).reshape(-1, 1)
-
-                    # add all FE of segments and their coordinates
-                    for i, s in enumerate(v['SegId'][1:]):
-                        # always exclude first element (identical with last element of previous segment)
-                        res_seg = res_1d[f][s - 1][1:]
-
-                        # generate path for segment FEs, assuming equidistant spacing
-                        path_1d = np.linspace(v['path_1d'][i], v['path_1d'][i+1], res_seg.shape[0] + 1)[1:]
-
-                        # append paths of all segments
-                        res['path'][k]['1d'] = np.hstack((res['path'][k]['1d'], path_1d))
-
-                        # interpolate results to 3D time steps
-                        interp = scipy.interpolate.interp1d(time['1d_all'], res_seg, bounds_error=False)
-                        res[f][k]['1d_int'] = np.hstack((res[f][k]['1d_int'], interp(time_3d_last_1d).T))
-                    # if k=='rt_carotid' and f=='flow':
-                    pdb.set_trace()
-
-                if not time['1d_all'].shape[0] == res[f][k]['1d_all'].shape[0]:
-                    print('time steps not matching results for 1d results ' + f + ' in GroupId ' + repr(v['GroupId']))
-                    pdb.set_trace()
-                    return None, None
-
-                res[f][k]['3d'] = res_3d_caps[f][:, v['BC_FaceID'] - 1] * s_3d
-                res[f][k]['3d_all'] = res[f][k]['3d']
-
-                # indicator for branching
-                if 'is_branch' in res_3d_interior:
-                    is_vessel = np.array(1 - res_3d_interior['is_branch'][v['SegId_cent'] - 1], dtype=bool)
-                    if not is_vessel[1]:
-                        is_vessel[0] = False
-                else:
-                    is_vessel = np.ones(v['path_3d'].shape, dtype=bool)
-
-                # read interior results
-                # res['path'][k]['3d'] = res_3d_interior['path'][v['SegId_cent']]
-                # res['path'][k]['3d'] = v['path_3d'][is_branch]
-                res['path'][k]['3d'] = v['path_3d'][is_vessel]
-                res[f][k]['3d_int'] = res_3d_interior[f][:, v['SegId_cent'] - 1][:, is_vessel]
-
-                # replace cap integrals
-                res[f][k]['3d_int'][:, i_1d] = res[f][k]['3d']
-
-                # if v['SegId'] in res_0d[f]:
-                #     res[f][k]['0d_all'] = res_0d[f][v['SegId']]
-                # else:
-                #     res[f][k]['0d_all'] = np.zeros(time['time_0d_all'].shape)
-                # # interpolate 0d results to 3d time steps of last cycle
-                # interp = scipy.interpolate.interp1d(time['time_0d_all'], res[f][k]['0d_all'])
-                #
-                # # 3d-time moved to the last full 1d cycle (for interpolation)
-                # n_cycle_0d = int(time['time_0d_all'][-1] // res_3d['time'][-1])
-                # time_3d_last_0d = res_3d['time'] + (n_cycle_0d - 1) * res_3d['time'][-1]
-                # res[f][k]['0d'] = interp(time_3d_last_0d)
-
-        return res, time
-
 
 class SimVascular:
     """
@@ -676,6 +465,7 @@ class SimVascular:
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
         self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
+        self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
         self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/bin/simvascular'
 
@@ -691,6 +481,10 @@ class SimVascular:
 
     def run_python(self, command):
         return subprocess.run([self.sv, ' --python -- '] + command)
+
+    def run_python_legacyio(self, command):
+        p = subprocess.Popen([self.sv_legacy_io, ' --python -- '] + command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return p.communicate()
 
     def run_python_debug(self, command):
         command = [self.sv, ' --python -- '] + command
