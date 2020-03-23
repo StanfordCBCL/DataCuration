@@ -83,13 +83,10 @@ def extract_results(fpath_1d, fpath_3d):
     # get all result array names
     res_names = get_res_names(reader_3d, ['pressure', 'velocity'])
 
-    # solution fields
-    fields = np.unique([k.split('_')[0] for k in res_names]).tolist()
-    fields += ['area']
-
     # get point and normals from centerline
     points = v2n(reader_1d.GetOutput().GetPoints().GetData())
     normals = v2n(reader_1d.GetOutput().GetPointData().GetArray('CenterlineSectionNormal'))
+    gid = v2n(reader_1d.GetOutput().GetPointData().GetArray('GlobalNodeId'))
 
     # initialize output
     for name in res_names + ['area']:
@@ -108,7 +105,7 @@ def extract_results(fpath_1d, fpath_3d):
         # check if point is cap
         reader_1d.GetOutput().GetPointCells(i, ids)
         if ids.GetNumberOfIds() == 1:
-            if i == 0:
+            if gid[i] == 0:
                 # inlet
                 points[i] += eps_norm * normals[i]
             else:
@@ -123,7 +120,7 @@ def extract_results(fpath_1d, fpath_3d):
             reader_1d.GetOutput().GetPointData().GetArray(name).SetValue(i, integral.evaluate(name))
         reader_1d.GetOutput().GetPointData().GetArray('area').SetValue(i, integral.area())
 
-    return reader_1d
+    return reader_1d.GetOutput()
 
 
 def main(db, geometries):
@@ -133,8 +130,12 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        fpath_1d = db.get_centerline_path_oned(geo)
+        fpath_1d = db.get_centerline_path(geo)
         fpath_3d = db.get_volume(geo)
+
+        if os.path.exists(db.get_3d_flow_path_oned_vtp(geo)):
+            print('  Already exists. Skipping...')
+            continue
 
         # extract 3d results integrated over cross-section
         try:
