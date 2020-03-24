@@ -90,7 +90,7 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
         seed_bf = []
         ring_bf = []
         for i, (p, br) in enumerate(zip(bifurcation['points_global'], bifurcation['branches'])):
-            print(bf, br)
+            # print(bf, br)
             if i == 0:
                 p += 1
             else:
@@ -116,8 +116,8 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
             ring = cp.search(v2n(sliced.GetPoints().GetData()))
             ring_bf += ring
 
-            ring_grow_1 = region_grow(surf, ring, distance, 1)
-            ring_grow_2 = region_grow(surf, ring, distance, 2)
+            ring_grow_1 = region_grow(surf, ring, distance, 2)
+            ring_grow_2 = region_grow(surf, ring, distance, 3)
 
             indicator_1 = np.intersect1d(ring_grow_1, np.where(branch_ids == br))
             indicator_2 = np.intersect1d(ring_grow_2, np.where(branch_ids == br))
@@ -202,7 +202,11 @@ def main(db, geometries):
         fpath_sect = db.get_section_path(geo)
         fpath_vol = db.get_volume(geo)
 
-        surf_cut = split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol)
+        try:
+            surf_cut = split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol)
+        except Exception as e:
+            print(e)
+            continue
 
         write_geo(db.get_surfaces_cut_path(geo), surf_cut)
 
