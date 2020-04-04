@@ -74,8 +74,8 @@ def load_results_3d(f_res_3d):
     Read 3d results embedded in centerline and sort according to branch at time step
     """
     # read 1d geometry
-    reader = read_geo(f_res_3d)
-    res = collect_arrays(reader.GetOutput().GetPointData())
+    reader = read_geo(f_res_3d).GetOutput()
+    res = collect_arrays(reader.GetPointData())
 
     # names of output arrays
     res_names = get_res_names(reader, ['pressure', 'velocity'])
@@ -156,7 +156,35 @@ def check_consistency(r_oned, res_1d, res_3d):
     return None
 
 
-def collect_results(f_res_1d, f_res_3d, f_1d_model, outlets):
+def get_caps(f_outlet, f_centerline):
+    """
+    Create dictionary: cap name -> BranchId
+    """
+    caps = {'inflow': 0}
+
+    # read ordered outlet names from file
+    outlet_names = []
+    with open(f_outlet) as file:
+        for line in file:
+            outlet_names += line.splitlines()
+
+    # read centerline
+    cent = read_geo(f_centerline).GetOutput()
+    branch_id = v2n(cent.GetPointData().GetArray('BranchId'))
+
+    # find outlets and store name and branch id
+    ids = vtk.vtkIdList()
+    i_outlet = 0
+    for i in range(1, cent.GetNumberOfPoints()):
+        cent.GetPointCells(i, ids)
+        if ids.GetNumberOfIds() == 1:
+            caps[outlet_names[i_outlet]] = branch_id[i]
+            i_outlet += 1
+
+    return caps
+
+
+def collect_results(f_res_1d, f_res_3d, f_1d_model, f_outlet):
     # todo: merge results into 1d model
     if not os.path.exists(f_1d_model):
         print('No 1d model')
@@ -177,8 +205,8 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, outlets):
     r_oned = read_geo(f_1d_model)
 
     # extract point and cell arrays from geometries
-    p_oned, c_oned = get_all_arrays(r_oned)
-    p_cent, c_cent = get_all_arrays(r_cent)
+    p_oned, _ = get_all_arrays(r_oned)
+    p_cent, _ = get_all_arrays(r_cent)
 
     # check inpud data for consistency
     err = check_consistency(r_oned, res_1d, res_3d)
@@ -186,13 +214,16 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, outlets):
         print(err)
         return None, None
 
+    # get cap->branch map
+    caps = get_caps(f_outlet, f_res_3d)
+
     # simulation time steps
     time = get_time(res_1d, res_3d)
 
     # loop outlets
     res = {}
     # for c, br in caps.items():
-    for br, c in enumerate(['inflow'] + outlets):
+    for c, br in caps.items():
         res[c] = {}
 
         # 1d-path along branch (real length units)
@@ -207,7 +238,7 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, outlets):
             # 1d interior results (loop through branch segments)
             res[c]['1d_path'] = []
 
-            assert path_1d.shape[0] == len(res_1d[f][br]) + 1, '1d model and 1d model do not match'
+            assert path_1d.shape[0] == len(res_1d[f][br]) + 1, '1d model and 1d results do not match'
 
             for seg, res_1d_seg in sorted(res_1d[f][br].items()):
                 # 1d results are duplicate at FE-nodes at corners of segments
@@ -258,11 +289,9 @@ def collect_results_db(db, geo):
     f_res_1d = db.get_1d_flow_path(geo)
     f_res_3d = db.get_3d_flow_path_oned_vtp(geo)
     f_1d_model = db.get_1d_geo(geo)
+    f_outlet = db.get_centerline_outlet_path(geo)
 
-    # get outlets
-    outlets = db.get_outlet_names(geo)
-
-    return collect_results(f_res_1d, f_res_3d, f_1d_model, outlets)
+    return collect_results(f_res_1d, f_res_3d, f_1d_model, f_outlet)
 
 
 def main(db, geometries):
