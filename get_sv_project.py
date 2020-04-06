@@ -3,12 +3,13 @@
 import pdb
 import os
 import shutil
+import glob
 import matplotlib.cm as cm
+from collections import OrderedDict
 
 import numpy as np
 
-from common import input_args
-from get_database import Database, SVProject
+from get_database import input_args, Database, SVProject, SimVascular
 from get_sim import write_bc
 
 
@@ -94,11 +95,76 @@ def write_model(db, geo):
         for s in model_end:
             f.write(s + '\n')
 
-    # todo: write segmentations
-    #             <segmentations>
-    #                 <seg name="aorta" />
-    #                 <seg name="right_iliac" />
-    #             </segmentations>
+
+def write_path_segmentation(db, geo):
+    # SimVascular instance
+    sv = SimVascular()
+
+    # get paths
+    p = OrderedDict()
+    p['f_path_in'] = db.get_path_file(geo)
+    p['f_path_out'] = os.path.join(db.get_svproj_dir(geo), db.svproj.dir['paths'])
+    p['f_seg_in'] = db.get_seg_dir(geo)
+    p['f_seg_out'] = os.path.join(db.get_svproj_dir(geo), db.svproj.dir['segmentations'])
+
+    # assemble call string
+    sv_string = [os.path.join(os.getcwd(), 'sv_get_path_segmentation.py')]
+    for v in p.values():
+        sv_string += [v]
+
+    # execute SimVascular-Python
+    out, err = sv.run_python_legacyio(sv_string)
+    return err
+
+    # check if all paths exist
+    f_seg_in = db.get_seg_dir(geo)
+
+    if not os.path.exists(f_seg_in[:-1]):
+        return 'folder does not exist: ' + f_seg_in[:-1]
+    if not glob.glob(f_seg_in):
+        return 'folder is empty: ' + f_seg_in
+
+    err = ''
+    path_list = ''
+    seg_list = ''
+    for name in glob.glob(f_seg_in):
+        if '.tcl' in name:
+            continue
+
+        # modify name
+        # name = name.replace('_new', '')
+        # name = name.replace('_final', '')
+        # name = name.replace('_FINAL', '')
+
+        path_file_name = os.path.join(p['f_path_out'], os.path.basename(name) + '.pth')
+        if not os.path.exists(path_file_name):
+            err += os.path.basename(path_file_name) + '\n'
+        else:
+            seg_list += name + ' '
+            path_list += path_file_name + ' '
+
+    if err:
+        err = '\nmissing paths:\n' + err
+        err += '\nfound paths:\n'
+        for name in glob.glob(os.path.join(p['f_path_out'], '*')):
+            err += os.path.basename(name) + '\n'
+
+        return str(err)
+
+    # get paths
+    p = OrderedDict()
+    p['path_list'] = '-path_list_in ' + path_list
+    p['seg_list'] = '-seg_list_in ' + seg_list
+    p['f_seg_out'] = '-seg_out ' + os.path.join(db.get_svproj_dir(geo), db.svproj.dir['segmentations'])
+
+    # assemble call string
+    sv_string = [os.path.join(os.getcwd(), 'sv_get_segmentation.py')]
+    for v in p.values():
+        sv_string += [v]
+
+    # execute SimVascular-Python
+    out, err = sv.run_python_legacyio(sv_string)
+    return err
 
 
 def copy_file(db, geo, src, trg_dir):
@@ -147,6 +213,11 @@ def main(db, geometries):
         make_folders(db, geo)
         write_svproj(db, geo)
         write_model(db, geo)
+        err = write_path_segmentation(db, geo)
+        if err:
+            print(err)
+        else:
+            print('  success!')
 
 
 if __name__ == '__main__':
