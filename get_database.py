@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import sys
 import shutil
 import glob
 import subprocess
@@ -45,6 +46,8 @@ def input_args(description):
         geometries = [param.geo]
     elif param.geo is None:
         geometries = database.get_geometries()
+    elif param.geo == '-1':
+        geometries = reversed(database.get_geometries())
     elif param.geo[-1] == ':':
         geo_all = database.get_geometries()
         geo_first = geo_all.index(param.geo[:-1])
@@ -147,10 +150,7 @@ class Database:
         animals = ['0066', '0067', '0068', '0069', '0070', '0071', '0072', '0073', '0074']
         single_vessel = ['0158', '0164', '0165']
 
-        # temporary: wrong integration due to displaced volumetric geometry
-        error = ['0091', '0092', '0154']
-
-        exclude = imaging + animals + single_vessel + error
+        exclude = imaging + animals + single_vessel
 
         geometries = []
         for g in geometries_in:
@@ -166,7 +166,7 @@ class Database:
 
     def get_geometries_select(self, name):
         if name == 'paper':
-            # pick alpl geometries in rest state
+            # pick all geometries in rest state
             geometries = []
             for geo in self.get_geometries():
                 _, params = self.get_bcs(geo)
@@ -183,6 +183,38 @@ class Database:
             geometries = ['0065_0001', '0065_1001', '0065_2001', '0065_3001', '0065_4001', '0078_0001', '0079_0001',
                           '0091_0001', '0091_2001', '0092_0001', '0108_0001', '0154_0001', '0154_1001', '0165_0001',
                           '0166_0001', '0183_1002', '0187_0002']
+        elif name == 'fix_inlet_node':
+            geometries = ['0080_0001', '0082_0001', '0083_2002', '0084_1001', '0088_1001', '0112_1001', '0134_0002']
+        elif name == 'bifurcation_outlet':
+            # outlet
+            geometries = ['0080_0001', '0082_0001', '0083_2002', '0084_1001', '0088_1001', '0112_1001', '0134_0002']
+        elif name == 'bifurcation_inlet':
+            # inlet
+            geometries = ['0065_1001', '0076_1001', '0081_0001', '0081_1001', '0086_0001', '0086_1001', '0089_1001',
+                          '0148_1001', '0155_0001', '0162_3001']
+        elif name == 'resistance':
+            geometries = []
+            for geo in self.get_geometries():
+                name, err = self.get_bc_type(geo)
+                if name == 'resistance':
+                    geometries += [geo]
+        elif 'units' in name:
+            geometries = []
+            for geo in self.get_geometries():
+                _, params = self.get_bcs(geo)
+                if params is None:
+                    continue
+                _, part, unit = name.split('_')
+                if part == 's' and params['sim_units'] == unit:
+                    geometries += [geo]
+                elif part == 'm' and params['model_units'] == unit:
+                    geometries += [geo]
+            print(geometries)
+            for geo in geometries:
+                _, params = self.get_bcs(geo)
+
+                print(self.get_in_model_units(geo, 'viscosity', float(params['sim_viscosity'])))
+            sys.exit(1)
         else:
             raise Exception('Unknown selection ' + name)
         return geometries
@@ -195,6 +227,34 @@ class Database:
             if os.path.exists(tcl) and os.path.exists(tcl_bc):
                 return get_bcs(tcl, tcl_bc)
         return None, None
+
+    def get_bc_type(self, geo):
+        outlets = self.get_outlet_names(geo)
+        bc_def, _ = self.get_bcs(geo)
+        if bc_def is None:
+            return None, 'boundary conditions not found'
+
+        bc_type = None
+        for s in outlets:
+            if s in bc_def['bc']:
+                bc = bc_def['bc'][s]
+            else:
+                return None, 'boundary conditions do not exist for surface ' + s
+
+            if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
+                bc_type_new = 'rcr'
+            elif 'R' in bc and 'Po' in bc:
+                bc_type_new = 'resistance'
+            elif 'COR' in bc:
+                return None, 'boundary conditions not implemented (coronary)'
+            else:
+                return None, 'boundary conditions not implemented'
+
+            if bc_type is not None and bc_type is not bc_type_new:
+                return None, 'boundary conditions change type'
+            bc_type = bc_type_new
+
+        return bc_type, False
 
     def get_png(self, geo):
         return os.path.join(self.fpath_png, 'OSMSC' + geo + '_sim.png')
@@ -445,15 +505,9 @@ class Database:
 
         constants = {'density': float(params['sim_density']), 'viscosity': float(params['sim_viscosity'])}
 
-        # no conversion for units cgs
-        if params['sim_units'] == 'cm':
-            pass
-        # convert cgm to cgs
-        elif params['sim_units'] == 'mm':
-            constants['density'] *= 1000
-            constants['viscosity'] *= 10
-        else:
-            raise ValueError('Unknown units ' + units)
+        # convert units
+        for name, val in constants.items():
+            constants[name] = self.get_in_model_units(geo, name, val)
 
         return constants
 
@@ -475,6 +529,38 @@ class Database:
         # todo: copy without results
         fpath_res = os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
         shutil.copy(fpath_res, os.path.join(self.get_solve_dir_3d(geo), 'mesh-complete'))
+
+    def get_in_model_units(self, geo, symbol, val):
+        # get bc units
+        _, params = self.get_bcs(geo)
+        s_units = params['sim_units']
+
+        # equal units, no conversion
+        if s_units == 'cm':
+            return val
+
+        # convert units
+        else:
+            sign = +1.0
+            # if s_units == 'mm' and m_units == 'cm':
+            #     sign = +1.0
+            # elif s_units == 'cm' and m_units == 'mm':
+            #     sign = -1.0
+            # else:
+            #     raise ValueError('Unknown unit combination ' + s_units + ' and ' + m_units)
+
+            if symbol == 'R':
+                return val * np.power(10.0, sign * 4)
+            elif symbol == 'C':
+                return val * np.power(10.0, - sign * 4)
+            elif symbol == 'P':
+                return val * np.power(10.0, sign * 1)
+            elif symbol == 'density':
+                return val * np.power(10.0, sign * 3)
+            elif symbol == 'viscosity':
+                return val * np.power(10.0, sign * 1)
+            else:
+                raise ValueError('Unknown boundary condition symbol ' + name)
 
 
 class SimVascular:
