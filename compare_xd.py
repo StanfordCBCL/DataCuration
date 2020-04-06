@@ -91,7 +91,12 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     # get 1d/3d map
     caps = db.get_surface_names(geo, 'caps')
 
-    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=opt['dpi'], sharex=opt['sharex'], sharey=opt['sharey'])
+    if len(caps) > 50:
+        dpi = opt['dpi'] / 2
+    else:
+        dpi = opt['dpi']
+
+    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=opt['sharey'])
 
     for i, f in enumerate(post.fields):
         for j, c in enumerate(caps):
@@ -126,7 +131,12 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
     # get 1d/3d map
     caps = db.get_surface_names(geo, 'caps')
 
-    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=opt['dpi'], sharex='col', sharey=opt['sharey'])
+    if len(caps) > 50:
+        dpi = opt['dpi'] / 2
+    else:
+        dpi = opt['dpi']
+
+    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=opt['sharey'])
 
     # pick time step
     t_max = np.argmax(res['inflow']['flow']['3d_cap'])
@@ -250,8 +260,8 @@ def calc_error(db, opt, geo, res, time):
             # interp = scipy.interpolate.interp1d(res['path'][c]['3d'], res[c][f]['3d_int'])
             # res_3d = interp(res['path'][c]['1d'])
 
-            # interpolate 1d results to 3d path
-            interp = scipy.interpolate.interp1d(res[c]['1d_path'], res[c][f]['1d_int'].T)
+            # interpolate 1d results to 3d path (allow extrapolation due to round-off errors at bounds)
+            interp = scipy.interpolate.interp1d(res[c]['1d_path'], res[c][f]['1d_int'].T, fill_value='extrapolate')
             res_1d = interp(res[c]['3d_path'])
 
             # difference in interior
