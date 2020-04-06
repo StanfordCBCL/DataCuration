@@ -149,7 +149,7 @@ def fix_surfaces(fpath_vol, fpath_surf, folder_out):
                 surf_cell_new[i] = found[0]
 
             # compare original 2D GlobalElementID to the fixed one
-            assert np.max(np.abs(surf_cell_new - surf_cell)) <= 5, 'round-off error bigger than expected'
+            assert np.max(np.abs(surf_cell_new - surf_cell)) <= 5, 'round-off error bigger than 5'
 
         # export surface
         fpath_out = os.path.join(folder_out, surf_fname)
