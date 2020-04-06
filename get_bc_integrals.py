@@ -10,8 +10,7 @@ import numpy as np
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-from common import input_args
-from get_database import Database
+from get_database import Database, input_args
 from vtk_functions import Integration, read_geo, write_geo, threshold, calculator, cut_plane
 
 
@@ -83,8 +82,8 @@ def get_res_names(inp, res_fields):
     res = []
 
     # get integral for each result
-    for i in range(inp.GetOutput().GetPointData().GetNumberOfArrays()):
-        res_name = inp.GetOutput().GetPointData().GetArrayName(i)
+    for i in range(inp.GetPointData().GetNumberOfArrays()):
+        res_name = inp.GetPointData().GetArrayName(i)
         field = res_name.split('_')[0]
 
         # check if field should be added to output
@@ -94,11 +93,11 @@ def get_res_names(inp, res_fields):
     return res
 
 
-def integrate_surfaces(reader_surf, cell_surf, res_fields):
+def integrate_surfaces(surf, cell_surf, res_fields):
     """
     Integrate desired fields on all caps of surface mesh (as defined by BC_FaceID)
     Args:
-        reader_surf: reader for surface mesh
+        surf: reader for surface mesh
         cell_surf: surface mesh cell data
         res_fields: result fields to extract
 
@@ -107,16 +106,16 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
     """
     # generate surface normals
     normals = vtk.vtkPolyDataNormals()
-    normals.SetInputData(reader_surf.GetOutput())
+    normals.SetInputData(surf)
     normals.Update()
 
     # recursively add calculators for normal velocities
     calc = normals
-    for v in get_res_names(reader_surf, 'velocity'):
+    for v in get_res_names(surf, 'velocity'):
         calc = calculator(calc, 'Normals.' + v, ['Normals', v], 'normal_' + v)
 
     # get all output array names
-    res_names = get_res_names(reader_surf, res_fields)
+    res_names = get_res_names(surf, res_fields)
 
     # boundary faces
     faces = np.unique(v2n(cell_surf.GetArray('BC_FaceID')).astype(int))
@@ -128,7 +127,7 @@ def integrate_surfaces(reader_surf, cell_surf, res_fields):
         # skip face 0 (vessel wall)
         if f:
             # threshhold face
-            thresh = threshold(calc, f, 'BC_FaceID')
+            thresh = threshold(calc.GetOutput(), f, 'BC_FaceID')
 
             # integrate over selected face (separately for pressure and velocity)
             integrator = Integration(thresh)
@@ -161,18 +160,18 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
         return None
 
     # read surface and volume meshes
-    reader_surf, node_surf, cell_surf = read_geo(fpath_surf)
-    _, node_vol, _ = read_geo(fpath_vol)
+    surf = read_geo(fpath_surf).GetOutput()
+    vol = read_geo(fpath_vol).GetOutput()
 
     # transfer solution from volume mesh to surface mesh
-    transfer_solution(node_surf, node_vol, res_fields)
+    transfer_solution(surf.GetPointData(), vol.GetPointData(), res_fields)
 
     # integrate data on boundary surfaces
-    res_faces = integrate_surfaces(reader_surf, cell_surf, res_fields)
+    res_faces = integrate_surfaces(surf, surf.GetCellData(), res_fields)
 
     # write results for debugging in paraview
     if debug:
-        write_geo(debug_out, reader_surf)
+        write_geo(debug_out, surf)
     return res_faces
 
 
