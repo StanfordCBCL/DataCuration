@@ -6,9 +6,8 @@ import os
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from get_database import Database
+from get_database import Database, input_args
 from vtk_functions import read_geo, write_geo
-from common import input_args
 
 
 def main(db, geometries):
@@ -19,13 +18,13 @@ def main(db, geometries):
         f_all = os.path.join(folder_out, 'all_exterior.vtp')
         f_wall = os.path.join(folder_out, 'wall.vtp')
 
-        read_all, node_all, cell_all = read_geo(f_all)
-        read_wall, node_wall, cell_wall = read_geo(f_wall)
+        read_all = read_geo(f_all).GetOutput()
+        read_wall = read_geo(f_wall).GetOutput()
 
         # read indices
-        fid_all = v2n(cell_all.GetArray('BC_FaceID'))
-        eid_all = v2n(cell_all.GetArray('GlobalElementID'))
-        eid_wall = v2n(cell_wall.GetArray('GlobalElementID'))
+        fid_all = v2n(read_all.GetCellData().GetArray('BC_FaceID'))
+        eid_all = v2n(read_all.GetCellData().GetArray('GlobalElementID'))
+        eid_wall = v2n(read_wall.GetCellData().GetArray('GlobalElementID'))
 
         # find wall indices in all_exterior
         index = np.argsort(eid_all)
@@ -45,8 +44,8 @@ def main(db, geometries):
         # export
         out_array = n2v(fid_all)
         out_array.SetName('BC_FaceID')
-        cell_all.RemoveArray('BC_FaceID')
-        cell_all.AddArray(out_array)
+        read_all.GetCellData().RemoveArray('BC_FaceID')
+        read_all.GetCellData().AddArray(out_array)
         write_geo(f_all, read_all)
 
 
