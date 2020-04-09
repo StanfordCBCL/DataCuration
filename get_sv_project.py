@@ -210,9 +210,14 @@ def main(db, geometries):
             print('  ' + err)
             continue
 
-        make_folders(db, geo)
-        write_svproj(db, geo)
-        write_model(db, geo)
+        try:
+            make_folders(db, geo)
+            write_svproj(db, geo)
+            write_model(db, geo)
+        except Exception:
+            print('  failed')
+            continue
+
         err = write_path_segmentation(db, geo)
         if err:
             print(err)

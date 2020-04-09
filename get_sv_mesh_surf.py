@@ -9,9 +9,8 @@ import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from common import input_args
 from get_bc_integrals import read_geo, write_geo
-from get_database import Database
+from get_database import Database, input_args
 from get_sim import write_bc
 
 
@@ -35,7 +34,9 @@ def generate(db, geo):
         return 'no surface mesh'
 
     # read volume mesh with results
-    surf, surf_p, surf_c = read_geo(f_surf[0])
+    surf = read_geo(f_surf).GetOutput()
+    surf_p = surf.GetPointData()
+    surf_c = surf.GetCellData()
 
     # reconstruct SimVascular arrays from BC_FaceID
     face_id = v2n(surf_c.GetArray('BC_FaceID'))
@@ -54,9 +55,9 @@ def generate(db, geo):
                'Normals', 'ActiveCells']
     arrays = {}
     for n in n_names:
-        arrays[n] = {'handle': surf_p, 'array': np.zeros(surf.GetOutput().GetNumberOfPoints(), dtype=np.int64)}
+        arrays[n] = {'handle': surf_p, 'array': np.zeros(surf.GetNumberOfPoints(), dtype=np.int64)}
     for n in c_names:
-        arrays[n] = {'handle': surf_c, 'array': np.zeros(surf.GetOutput().GetNumberOfCells(), dtype=np.int64)}
+        arrays[n] = {'handle': surf_c, 'array': np.zeros(surf.GetNumberOfCells(), dtype=np.int64)}
 
     # rename
     arrays['ModelFaceID']['array'] = face_id
@@ -81,14 +82,14 @@ def generate(db, geo):
 
     # generate normals
     normals = vtk.vtkPolyDataNormals()
-    normals.SetInputData(surf.GetOutput())
+    normals.SetInputData(surf)
     normals.ComputePointNormalsOff()
     normals.ComputeCellNormalsOn()
     normals.SplittingOff()
     normals.Update()
 
     # export to generated folder
-    write_geo(db.get_sv_surface(geo), normals)
+    write_geo(db.get_sv_surface_path(geo), normals.GetOutput())
 
     return None
 
