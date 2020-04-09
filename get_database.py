@@ -17,7 +17,7 @@ from collections import OrderedDict
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-from get_bcs import get_bcs
+from get_bcs import get_bcs, get_in_model_units
 from vtk_functions import read_geo
 from common import get_dict
 
@@ -51,6 +51,11 @@ def input_args(description):
     elif param.geo[-1] == ':':
         geo_all = database.get_geometries()
         geo_first = geo_all.index(param.geo[:-1])
+        geometries = geo_all[geo_first:]
+    elif param.geo[-3:] == ':-1':
+        geo_all = database.get_geometries()
+        geo_all.reverse()
+        geo_first = geo_all.index(param.geo[:-3])
         geometries = geo_all[geo_first:]
     else:
         geometries = database.get_geometries_select(param.geo)
@@ -213,8 +218,15 @@ class Database:
             for geo in geometries:
                 _, params = self.get_bcs(geo)
 
-                print(self.get_in_model_units(geo, 'viscosity', float(params['sim_viscosity'])))
+                print(get_in_model_units(params['sim_units'], 'viscosity', float(params['sim_viscosity'])))
             sys.exit(1)
+        elif name == 'coronary':
+            geometries = []
+            for geo in self.get_geometries():
+                bc_type, err = self.get_bc_type(geo)
+                if bc_type is not None and 'coronary' in bc_type.values():
+                    geometries += [geo]
+
         else:
             raise Exception('Unknown selection ' + name)
         return geometries
@@ -231,10 +243,11 @@ class Database:
     def get_bc_type(self, geo):
         outlets = self.get_outlet_names(geo)
         bc_def, _ = self.get_bcs(geo)
+
         if bc_def is None:
             return None, 'boundary conditions not found'
 
-        bc_type = None
+        bc_type = {}
         for s in outlets:
             if s in bc_def['bc']:
                 bc = bc_def['bc'][s]
@@ -242,17 +255,13 @@ class Database:
                 return None, 'boundary conditions do not exist for surface ' + s
 
             if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
-                bc_type_new = 'rcr'
+                bc_type[s] = 'rcr'
             elif 'R' in bc and 'Po' in bc:
-                bc_type_new = 'resistance'
+                bc_type[s] = 'resistance'
             elif 'COR' in bc:
-                return None, 'boundary conditions not implemented (coronary)'
+                bc_type[s] = 'coronary'
             else:
                 return None, 'boundary conditions not implemented'
-
-            if bc_type is not None and bc_type is not bc_type_new:
-                return None, 'boundary conditions change type'
-            bc_type = bc_type_new
 
         return bc_type, False
 
@@ -272,7 +281,10 @@ class Database:
         return os.path.join(self.fpath_gen, 'surfaces', geo)
 
     def get_sv_surface(self, geo):
-        return exists(os.path.join(self.fpath_gen, 'surfaces_sv', geo + '.vtp'))
+        return exists(self.get_sv_surface_path(geo))
+
+    def get_sv_surface_path(self, geo):
+        return os.path.join(self.fpath_gen, 'surfaces_sv', geo + '.vtp')
 
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
@@ -304,20 +316,14 @@ class Database:
     def get_surfaces_grouped_path_oned(self, geo):
         return os.path.join(self.fpath_gen, 'surfaces_grouped_oned', geo + '.vtp')
 
-    def get_centerline_path_1d(self, geo):
-        return os.path.join(self.fpath_gen, 'centerlines_from_1d', geo + '.vtp')
-
-    def get_centerline_path_oned(self, geo):
-        return os.path.join(self.fpath_gen, 'centerlines_oned', geo + '.vtp')
-
-    def get_centerline_path_raw(self, geo):
-        return os.path.join(self.fpath_gen, 'centerlines_raw', geo + '.vtp')
-
     def get_centerline_section_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines_sections', geo + '.vtp')
 
     def get_section_path(self, geo):
         return os.path.join(self.fpath_gen, 'sections', geo + '.vtp')
+
+    def get_bifurcation_path(self, geo):
+        return os.path.join(self.fpath_gen, 'bifurcation_pressure', geo + '.vtp')
 
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
@@ -439,6 +445,7 @@ class Database:
 
     def get_surface_names(self, geo, surf='all'):
         surfaces = self.get_surfaces(geo, surf)
+        surfaces = [surfaces] if isinstance(surfaces, str) else surfaces
         surfaces = [os.path.splitext(os.path.basename(s))[0] for s in surfaces]
         surfaces.sort()
 
@@ -507,7 +514,7 @@ class Database:
 
         # convert units
         for name, val in constants.items():
-            constants[name] = self.get_in_model_units(geo, name, val)
+            constants[name] = get_in_model_units(params['sim_units'], name, val)
 
         return constants
 
@@ -530,38 +537,6 @@ class Database:
         fpath_res = os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
         shutil.copy(fpath_res, os.path.join(self.get_solve_dir_3d(geo), 'mesh-complete'))
 
-    def get_in_model_units(self, geo, symbol, val):
-        # get bc units
-        _, params = self.get_bcs(geo)
-        s_units = params['sim_units']
-
-        # equal units, no conversion
-        if s_units == 'cm':
-            return val
-
-        # convert units
-        else:
-            sign = +1.0
-            # if s_units == 'mm' and m_units == 'cm':
-            #     sign = +1.0
-            # elif s_units == 'cm' and m_units == 'mm':
-            #     sign = -1.0
-            # else:
-            #     raise ValueError('Unknown unit combination ' + s_units + ' and ' + m_units)
-
-            if symbol == 'R':
-                return val * np.power(10.0, sign * 4)
-            elif symbol == 'C':
-                return val * np.power(10.0, - sign * 4)
-            elif symbol == 'P':
-                return val * np.power(10.0, sign * 1)
-            elif symbol == 'density':
-                return val * np.power(10.0, sign * 3)
-            elif symbol == 'viscosity':
-                return val * np.power(10.0, sign * 1)
-            else:
-                raise ValueError('Unknown boundary condition symbol ' + name)
-
 
 class SimVascular:
     """
@@ -570,7 +545,7 @@ class SimVascular:
     def __init__(self):
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
-        self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
+        self.onedsolver = '/home/pfaller/work/repos/oneDSolver_coronary/build/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
