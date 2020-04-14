@@ -289,17 +289,8 @@ class Database:
     def get_bc_flow_path(self, geo):
         return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
 
-    def get_3d_flow_path(self, geo):
-        return os.path.join(self.fpath_gen, '3d_flow', geo + '.npy')
-
-    def get_3d_flow_path_oned(self, geo):
-        return os.path.join(self.fpath_gen, '3d_flow_oned', geo + '.npy')
-
-    def get_3d_flow_path_oned_vtp(self, geo):
-        return os.path.join(self.fpath_gen, '3d_flow_oned', geo + '.vtp')
-
-    def get_3d_flow_path_old(self, geo):
-        return os.path.join(self.fpath_gen, '3d_flow_no_exclusion', geo + '.npy')
+    def get_3d_flow(self, geo):
+        return os.path.join(self.fpath_gen, '3d_flow', geo + '.vtp')
 
     def get_centerline_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines', geo + '.vtp')
@@ -413,7 +404,7 @@ class Database:
 
     # todo: adapt to units?
     def get_seg_dir(self, geo):
-        return os.path.join(self.get_seg_path(geo), geo + '_groups-cm', '*')
+        return os.path.join(self.get_seg_path(geo), geo + '_groups-cm')
 
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
@@ -545,7 +536,7 @@ class SimVascular:
     def __init__(self):
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
-        self.onedsolver = '/home/pfaller/work/repos/oneDSolver_coronary/build/bin/OneDSolver'
+        self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
@@ -566,6 +557,10 @@ class SimVascular:
 
     def run_python_legacyio(self, command):
         p = subprocess.Popen([self.sv_legacy_io, ' --python -- '] + command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        m = ''
+        for s in [self.sv_legacy_io, ' --python -- '] + command:
+            m += s + ' '
+        # print(m)
         return p.communicate()
 
     def run_python_debug(self, command):
