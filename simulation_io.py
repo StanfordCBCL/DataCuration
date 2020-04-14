@@ -222,7 +222,6 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_outlet):
 
     # loop outlets
     res = {}
-    # for c, br in caps.items():
     for c, br in caps.items():
         res[c] = {}
 
@@ -287,7 +286,7 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_outlet):
 def collect_results_db(db, geo):
     # get paths
     f_res_1d = db.get_1d_flow_path(geo)
-    f_res_3d = db.get_3d_flow_path_oned_vtp(geo)
+    f_res_3d = db.get_3d_flow(geo)
     f_1d_model = db.get_1d_geo(geo)
     f_outlet = db.get_centerline_outlet_path(geo)
 
