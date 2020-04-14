@@ -104,16 +104,29 @@ def write_path_segmentation(db, geo):
     p = OrderedDict()
     p['f_path_in'] = db.get_path_file(geo)
     p['f_path_out'] = os.path.join(db.get_svproj_dir(geo), db.svproj.dir['paths'])
-    p['f_seg_in'] = db.get_seg_dir(geo)
-    p['f_seg_out'] = os.path.join(db.get_svproj_dir(geo), db.svproj.dir['segmentations'])
 
-    # assemble call string
-    sv_string = [os.path.join(os.getcwd(), 'sv_get_path_segmentation.py')]
-    for v in p.values():
-        sv_string += [v]
+    seg_dir = db.get_seg_dir(geo)
+    segments = glob.glob(os.path.join(seg_dir, '*'))
+
+    err_seg = ''
+    for s in segments:
+        p['f_seg_in'] = s
+        p['f_seg_out'] = os.path.join(db.get_svproj_dir(geo), db.svproj.dir['segmentations'])
+
+        if '.tcl' in s:
+            continue
+
+        # assemble call string
+        sv_string = [os.path.join(os.getcwd(), 'sv_get_path_segmentation.py')]
+        for v in p.values():
+            sv_string += [v]
+
+        err = sv.run_python_legacyio(sv_string)[1]
+        if err:
+            err_seg += os.path.basename(s).split('.')[0] + '\n'
 
     # execute SimVascular-Python
-    return sv.run_python_legacyio(sv_string)[1]
+    return err_seg
 
 
 def copy_file(db, geo, src, trg_dir):
@@ -169,7 +182,7 @@ def main(db, geometries):
 
         err = write_path_segmentation(db, geo)
         if err:
-            print(err)
+            print('  \nmissing paths:\n' + err)
         else:
             print('  success!')
 
