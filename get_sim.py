@@ -3,7 +3,10 @@
 import numpy as np
 import os
 import pdb
+from scipy.optimize import fsolve
+import math
 
+from get_bcs import get_in_model_units
 
 # create input file for svpre
 def write_pre(fpath_solve, bc_def, geo):
@@ -58,53 +61,88 @@ def write_pre(fpath_solve, bc_def, geo):
     return fname_pre
 
 
-def write_value(db, geo, bc, name):
-    return str(db.get_in_model_units(geo, name[0], float(bc[name])))
+def write_value(params, geo, bc, name):
+    return str(get_in_model_units(params['sim_units'], name[0], float(bc[name])))
 
 
 def write_bc(fdir, db, geo):
     # get boundary conditions
-    bc_def, _ = db.get_bcs(geo)
+    bc_def, params = db.get_bcs(geo)
 
     # check if bc-file exists
     if not bc_def:
         return None, 'boundary conditions do not exist'
-
-    # get outlet names
-    outlets = db.get_outlet_names(geo)
 
     # get type of bcs
     bc_type, err = db.get_bc_type(geo)
     if err:
         return None, err
 
-    # write bc-file
-    fname = os.path.join(fdir, bc_type + '.dat')
-    f = open(fname, 'w+')
+    # get outlet names
+    outlets = db.get_outlet_names(geo)
 
-    if bc_type == 'rcr':
-        keyword = 'newbcface'
-        f.write(keyword + '\n')
+    # names expected by SimVascular for different boundary conditions
+    bc_file_names = {'rcr': 'rcrt.dat', 'resistance': 'resistance.dat', 'coronary': 'cort.dat'}
+
+    # keyword to indicate a new boundary condition
+    keyword = 'newbc'
+
+    # create bc-files for every bc type
+    u_bc_types = list(set(bc_type.values()))
+    files = {}
+    fnames = []
+    for t in u_bc_types:
+        if t in bc_file_names:
+            fname = os.path.join(fdir, bc_file_names[t])
+            files[t] = open(fname, 'w+')
+            fnames += [fname]
+
+            # write keyword for new faces in first line
+            if t == 'rcr' or t == 'coronary':
+                files[t].write(keyword + '\n')
+        else:
+            return None, 'boundary condition not implemented (' + t + ')'
 
     # write boundary conditions
     for s in outlets:
         bc = bc_def['bc'][s]
-        if bc_type == 'rcr':
+        t = bc_type[s]
+        f = files[t]
+        if t == 'rcr':
             f.write(keyword + '\n')
             f.write(s + '\n')
-            f.write(write_value(db, geo, bc, 'Rp') + '\n')
-            f.write(write_value(db, geo, bc, 'C') + '\n')
-            f.write(write_value(db, geo, bc, 'Rd') + '\n')
+            f.write(write_value(params, geo, bc, 'Rp') + '\n')
+            f.write(write_value(params, geo, bc, 'C') + '\n')
+            f.write(write_value(params, geo, bc, 'Rd') + '\n')
             # not sure what this does???
             f.write('0.0 0\n')
             f.write('1.0 0\n')
-        elif bc_type == 'resistance':
+        elif t == 'resistance':
             f.write(s + ' ')
-            f.write(write_value(db, geo, bc, 'R') + ' ')
-            f.write(write_value(db, geo, bc, 'Po') + '\n')
-        else:
-            return None, 'boundary conditions not implemented'
+            f.write(write_value(params, geo, bc, 'R') + ' ')
+            f.write(write_value(params, geo, bc, 'Po') + '\n')
+        elif t == 'coronary':
+            f.write(keyword + '\n')
+            f.write(s + '\n')
+            f.write(write_value(params, geo, bc, 'q0') + '\n')
+            f.write(write_value(params, geo, bc, 'q1') + '\n')
+            f.write(write_value(params, geo, bc, 'q2') + '\n')
+            f.write(write_value(params, geo, bc, 'p0') + '\n')
+            f.write(write_value(params, geo, bc, 'p1') + '\n')
+            f.write(write_value(params, geo, bc, 'p2') + '\n')
+            f.write(write_value(params, geo, bc, 'b0') + '\n')
+            f.write(write_value(params, geo, bc, 'b1') + '\n')
+            f.write(write_value(params, geo, bc, 'b2') + '\n')
+            f.write(write_value(params, geo, bc, 'dQinidT') + '\n')
+            f.write(write_value(params, geo, bc, 'dPinidT') + '\n')
 
-    f.close()
+            print(bc)
+            # write time and pressure pairs
+            for m in bc_def['coronary'][bc['Pim']]:
+                f.write(str(m[0]) + ' ' + str(get_in_model_units(params['sim_units'], 'P', m[1])) + '\n')
 
-    return fname, False
+    # close all opened files
+    for t in u_bc_types:
+        files[t].close()
+
+    return fnames, False

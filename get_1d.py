@@ -29,7 +29,7 @@ def generate_1d(db, geo):
     n_cycle = 10
 
     # sub-segment size
-    seg_min_num = 1
+    seg_min_num = 2
     seg_size = 999
 
     # FEM size
@@ -37,7 +37,7 @@ def generate_1d(db, geo):
     element_size = 0.1
 
     # mesh adaptive?
-    seg_size_adaptive = False
+    seg_size_adaptive = True
 
     # set simulation paths and create folders
     fpath_1d = db.get_solve_dir_1d(geo)
@@ -65,12 +65,12 @@ def generate_1d(db, geo):
         return '3d geometry has multiple inlets (' + repr(n_inlet) + ')'
 
     # assume pre-computed centerlines from SimVascular C++ (don't use python vmtk interfance)
-    centerlines_input_file = db.get_centerline_path_oned(geo)
+    centerlines_input_file = db.get_centerline_path(geo)
     if not os.path.exists(centerlines_input_file):
         return 'centerline does not exist'
 
     # write outlet boundary conditions to file if they exist
-    fpath_outlet_bcs, err = write_bc(fpath_1d, db, geo)
+    bc_types, err = write_bc(fpath_1d, db, geo)
     if err:
         return err
 
@@ -79,7 +79,6 @@ def generate_1d(db, geo):
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
-    # pref = 0
 
     # copy cap surfaces to simulation folder
     for f in db.get_surfaces(geo, 'caps'):
@@ -87,7 +86,7 @@ def generate_1d(db, geo):
 
     # copy outlet names
     fpath_outlets = os.path.join(fpath_1d, 'outlets')
-    shutil.copy2(db.get_centerline_outlet_path(geo), fpath_outlets)
+    shutil.copy(db.get_centerline_outlet_path(geo), fpath_outlets)
 
     # read inflow conditions
     flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
@@ -99,16 +98,13 @@ def generate_1d(db, geo):
     time = flow['time']
     inflow = flow['velocity'][:, int(bc_def['preid']['inflow']) - 1]
 
-    # repeat cycles (one more than n_cycle to guarantee inflow data in case of round-off errors with time steps)
-    for i in range(n_cycle):
-        time = np.append(time, flow['time'] + time[-1])
-    inflow = np.tile(inflow, n_cycle + 1)
-
     # insert last 3d time step as 1d initial condition (periodic solution)
     time = np.insert(time, 0, 0)
     inflow = np.insert(inflow, 0, inflow[-1])
 
     # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
+    if geo == '0069_0001':
+        inflow *= -1
     np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, - inflow)).T)
 
     # set simulation time as end of 3d simulation
@@ -117,9 +113,6 @@ def generate_1d(db, geo):
 
     # run all cycles
     num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
-
-    # only run until first 3D time step
-    # num_dts = int(flow['time'][0] / dt + 1.0)
 
     try:
     # if True:
@@ -144,8 +137,8 @@ def generate_1d(db, geo):
                  olufsen_material_k3=None,
                  olufsen_material_exp=None,
                  olufsen_material_pressure=pref,
-                 outflow_bc_input_file=fpath_outlet_bcs,
-                 outflow_bc_type=os.path.splitext(os.path.basename(fpath_outlet_bcs))[0],
+                 outflow_bc_input_file=fpath_1d,
+                 outflow_bc_type=bc_types,
                  outlet_face_names_input_file=fpath_outlets,
                  output_directory=fpath_1d,
                  seg_min_num=seg_min_num,

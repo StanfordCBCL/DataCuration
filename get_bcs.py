@@ -2,7 +2,9 @@
 
 import re
 import tkinter
-
+import pdb
+from collections import defaultdict
+import numpy as np
 
 def get_dic(st):
     """
@@ -71,6 +73,58 @@ def read_array(r, name, subdic=True):
     return dc
 
 
+def get_in_model_units(s_units, symbol, val):
+    # equal units, no conversion
+    if s_units == 'cm':
+        return val
+
+    # convert units
+    else:
+        sign = +1.0
+        # if s_units == 'mm' and m_units == 'cm':
+        #     sign = +1.0
+        # elif s_units == 'cm' and m_units == 'mm':
+        #     sign = -1.0
+        # else:
+        #     raise ValueError('Unknown unit combination ' + s_units + ' and ' + m_units)
+
+        if symbol == 'R' or symbol == 'q':
+            return val * np.power(10.0, sign * 4)
+        elif symbol == 'C':
+            return val * np.power(10.0, - sign * 4)
+        elif symbol == 'P':
+            return val * np.power(10.0, sign * 1)
+        elif symbol == 'density':
+            return val * np.power(10.0, sign * 3)
+        elif symbol == 'viscosity':
+            return val * np.power(10.0, sign * 1)
+        else:
+            raise ValueError('Unknown boundary condition symbol ' + name)
+
+
+def get_flow_coronary(r):
+    # read tcl array
+    exe = r.tk.eval('array get sim_array')
+    st = list(filter(None, re.split(' |({|})', exe)))
+    st = [i for i in st if i != '{' and i != '}']
+
+    # create new dict key for each pressure table
+    pressures = defaultdict(list)
+    name = ''
+    for e in st:
+        try:
+            val = float(e)
+            pressures[name] += [val]
+        except ValueError:
+            name = e
+
+    # split arrays in time and pressure
+    for k, v in pressures.items():
+        pressures[k] = np.array(v).reshape(-1, 2)
+
+    return pressures
+
+
 def get_bcs(tcl, tcl_bc):
     # evaluate tcl-script to extract variables for boundary conditions
     r_bc = tkinter.Tk()
@@ -82,7 +136,14 @@ def get_bcs(tcl, tcl_bc):
     sim_preid = read_array(r_bc, 'sim_preid')
     sim_spname = read_array(r_bc, 'sim_spname', False)
 
-    bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname}
+    # extract pressure over time in case of coronary boundary conditions
+    coronary = {}
+    for bc in sim_bc.values():
+        if 'COR' in bc.keys():
+            coronary = get_flow_coronary(r_bc)
+            break
+
+    bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname, 'coronary': coronary}
 
     # evaluate tcl-script to extract variables for general simulation parameters
     r = tkinter.Tk()
@@ -99,4 +160,3 @@ def get_bcs(tcl, tcl_bc):
     r.destroy()
 
     return bcs, params
-
