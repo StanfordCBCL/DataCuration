@@ -9,7 +9,7 @@ import pdb
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationBbox
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 from get_database import Database, Post, input_args
 from simulation_io import collect_results_db
@@ -96,15 +96,18 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     else:
         dpi = opt['dpi']
 
-    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=opt['sharey'])
+    fields = post.fields
+    fields.remove('area')
 
-    for i, f in enumerate(post.fields):
+    fig, ax = plt.subplots(len(fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=opt['sharey'])
+
+    for i, f in enumerate(fields):
         for j, c in enumerate(caps):
             ax[i, j].grid(True)
 
             if opt['legend_row'] or i == 0:
                 ax[i, j].set_title(c)
-            if opt['legend_row'] or i == len(post.fields) - 1:
+            if opt['legend_row'] or i == len(fields) - 1:
                 ax[i, j].set_xlabel('Time [s]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
             if opt['legend_col'] or j == 0:
@@ -114,13 +117,13 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
             lg = []
             for m in post.models:
                 ax[i, j].plot(time['3d'], res[c][f][m + '_cap'] * post.convert[f], post.styles[m])
-                lg.append(m)
+                lg.append(m.upper())
 
             ax[i, j].legend(lg)
 
     add_image(db, geo, fig)
     # fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    fig.savefig(db.get_post_path(geo, 'caps'))
+    fig.savefig(db.get_post_path(geo, 'caps'), bbox_inches='tight')
     plt.close(fig)
 
 
@@ -250,12 +253,11 @@ def calc_error(db, opt, geo, res, time):
     caps.remove('inflow')
 
     # all differences over time
-    delta = {}
+    delta = defaultdict(lambda: defaultdict(dict))
+    mean = defaultdict(lambda: defaultdict(dict))
+    maxi = defaultdict(lambda: defaultdict(dict))
     for f in post.fields:
-        delta[f] = {}
         for c in caps:
-            delta[f][c] = {}
-
             # interpolate 3d results to 1d path
             # interp = scipy.interpolate.interp1d(res['path'][c]['3d'], res[c][f]['3d_int'])
             # res_3d = interp(res['path'][c]['1d'])
@@ -266,12 +268,16 @@ def calc_error(db, opt, geo, res, time):
 
             # difference in interior
             # delta[f][c]['int'] = np.linalg.norm(res_3d - res[c][f]['1d_int'], axis=1) * post.convert[f]
-            delta[f][c]['int'] = np.linalg.norm(res_1d - res[c][f]['3d_int'].T, axis=1) * post.convert[f]
+            delta[f][c]['int'] = np.mean(np.abs(res_1d - res[c][f]['3d_int'].T), axis=1) * post.convert[f]
+            mean[f][c]['int'] = np.mean(res[c][f]['3d_int'].T) * post.convert[f]
+            maxi[f][c]['int'] = np.max(res[c][f]['3d_int'].T) * post.convert[f]
 
             # difference at caps
-            delta[f][c]['caps'] = (res[c][f]['3d_cap'] - res[c][f]['1d_cap']) * post.convert[f]
+            delta[f][c]['caps'] = (res[c][f]['3d_cap'] - res[c][f]['1d_cap']) ** 2 * post.convert[f]
+            mean[f][c]['caps'] = np.mean(res[c][f]['3d_cap'].T) * post.convert[f]
+            maxi[f][c]['caps'] = np.max(res[c][f]['3d_cap'].T) * post.convert[f]
 
-    # mean/max difference over time
+    # mean difference over time
     err = {}
     for f in post.fields:
         err[f] = {}
@@ -279,15 +285,25 @@ def calc_error(db, opt, geo, res, time):
             err[f][c] = {}
             for name in delta[f][c].keys():
                 err[f][c][name] = {}
-                err[f][c][name]['max'] = np.max(np.abs(delta[f][c][name]))
-                err[f][c][name]['mean'] = np.mean(np.abs(delta[f][c][name]))
+                err[f][c][name]['mean'] = {}
+                err[f][c][name]['mean']['abs'] = np.mean(np.sqrt(delta[f][c][name]))
+                err[f][c][name]['mean']['rel'] = np.mean(np.sqrt(delta[f][c][name])) / np.mean(mean[f][c][name])
+                err[f][c][name]['max'] = {}
+                err[f][c][name]['max']['abs'] = np.max(np.sqrt(delta[f][c][name]))
+                err[f][c][name]['max']['rel'] = np.max(np.sqrt(delta[f][c][name])) / np.max(np.abs(maxi[f][c][name]))
 
+    # mean difference over caps
     for f in post.fields:
         err[f]['all'] = {}
         for name in delta[f][c].keys():
             err[f]['all'][name] = {}
-            err[f]['all'][name]['max'] = np.max([err[f][c][name]['max'] for c in caps])
-            err[f]['all'][name]['mean'] = np.mean([err[f][c][name]['mean'] for c in caps])
+            for m0 in err[f][c][name].keys():
+                err[f]['all'][name][m0] = {}
+                for m1 in err[f][c][name][m0].keys():
+                    if m0 == 'mean':
+                        err[f]['all'][name][m0][m1] = np.mean([err[f][c][name][m0][m1] for c in caps])
+                    elif m0 == 'max':
+                        err[f]['all'][name][m0][m1] = np.max([err[f][c][name][m0][m1] for c in caps])
 
     db.add_1d_3d_comparison(geo, err)
 
