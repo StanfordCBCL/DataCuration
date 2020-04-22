@@ -10,8 +10,10 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_database import Database, SimVascular, input_args
-from vtk_functions import read_geo, write_geo, collect_arrays, threshold, geo, clean, region_grow, ClosestPoints
+from vtk_functions import read_geo, write_geo, collect_arrays, threshold, geo, clean, region_grow, region_grow_simultaneous, ClosestPoints
 from vmtk import vtkvmtk, vmtkscripts
+
+from collections import defaultdict
 
 
 def color_clip(poly, name_this, name_other):
@@ -36,6 +38,35 @@ def color_clip(poly, name_this, name_other):
     poly.GetCellData().AddArray(color_other)
 
 
+def get_bifurcations(cent):
+    # read all point arrays
+    arr_cent = collect_arrays(cent.GetPointData())
+
+    # all bifurcation ids
+    bifurcation_ids = np.unique(arr_cent['BifurcationId']).tolist()
+    bifurcation_ids.remove(-1)
+
+    # collect point and cell ids
+    pids = vtk.vtkIdList()
+    cids = vtk.vtkIdList()
+
+    # collect points surrounding each bifurcation
+    bifurcations = {}
+    for bf in bifurcation_ids:
+        bifurcations[bf] = defaultdict(list)
+        for i in range(cent.GetNumberOfPoints()):
+            if arr_cent['BifurcationId'][i] == bf:
+                cent.GetPointCells(i, cids)
+                for j in range(cids.GetNumberOfIds()):
+                    cent.GetCellPoints(cids.GetId(j), pids)
+                    for k in range(pids.GetNumberOfIds()):
+                        br_id = arr_cent['BranchId'][pids.GetId(k)]
+                        if br_id != -1:
+                            bifurcations[bf]['branches'] += [br_id]
+                            bifurcations[bf]['points'] += [pids.GetId(k)]
+    return bifurcations
+
+
 def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
     surf = read_geo(fpath_surf).GetOutput()
     cent = read_geo(fpath_cent).GetOutput()
@@ -53,24 +84,8 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
     pids = vtk.vtkIdList()
     cids = vtk.vtkIdList()
 
-    # collect points surrounding each bifurcation
-    bifurcations = {}
-    for bf in bifurcation_ids:
-        bifurcations[bf] = {}
-        bifurcations[bf]['branches'] = []
-        bifurcations[bf]['points_local'] = []
-        bifurcations[bf]['points_global'] = []
-        for i in range(cent.GetNumberOfPoints()):
-            if arr_cent['BifurcationId'][i] == bf:
-                cent.GetPointCells(i, cids)
-                for j in range(cids.GetNumberOfIds()):
-                    cent.GetCellPoints(cids.GetId(j), pids)
-                    for k in range(pids.GetNumberOfIds()):
-                        br_id = arr_cent['BranchId'][pids.GetId(k)]
-                        if br_id != -1:
-                            bifurcations[bf]['branches'] += [br_id]
-                            bifurcations[bf]['points_local'] += [pids.GetId(k)]
-                            bifurcations[bf]['points_global'] += [arr_cent['GlobalNodeId'][pids.GetId(k)]]
+    # get centerline connectivity
+    bifurcations = get_bifurcations(cent)
 
     branch_ids = arr_surf['BranchId']
 
@@ -80,21 +95,17 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
 
     # distance array used for clipping
     distance = -1 * np.ones(surf.GetNumberOfPoints())
-    branch_cut = -1 * np.ones(surf.GetNumberOfPoints())
-    branch_dist = -1 * np.ones(surf.GetNumberOfPoints())
 
+    rings = defaultdict(dict)
     # loop bifurcations
     for bf, bifurcation in bifurcations.items():
         
         # loop attached branches
-        seed_bf = []
-        ring_bf = []
+        # seed_bf = []
+        # ring_bf = []
         for i, (p, br) in enumerate(zip(bifurcation['points_global'], bifurcation['branches'])):
             # print(bf, br)
-            if i == 0:
-                p += 1
-            else:
-                p -= 1
+
             # pick slice separating bifurcation and branch
             sliced = threshold(sect, p, 'GlobalNodeId').GetOutput()
 
@@ -114,29 +125,37 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
 
             # mark bifurcation cuts
             ring = cp.search(v2n(sliced.GetPoints().GetData()))
-            ring_bf += ring
+            # ring_bf += ring
 
-            ring_grow_1 = region_grow(surf, ring, distance, 2)
-            ring_grow_2 = region_grow(surf, ring, distance, 3)
+            rings[bf][br] = ring
 
-            indicator_1 = np.intersect1d(ring_grow_1, np.where(branch_ids == br))
-            indicator_2 = np.intersect1d(ring_grow_2, np.where(branch_ids == br))
+            # ring_grow_1 = region_grow(surf, ring, distance, 2)
+            # ring_grow_2 = region_grow(surf, ring, distance, 3)
+            #
+            # indicator_1 = np.intersect1d(ring_grow_1, np.where(branch_ids == br))
+            # indicator_2 = np.intersect1d(ring_grow_2, np.where(branch_ids == br))
 
-            branch_cut[indicator_1] = 1
+            # bifurcation_id[indicator_1] = 1
 
-            ring_diff = list(set(indicator_2) - set(indicator_1))
-            seed_bf += np.array(ring_diff)[dist[ring_diff] > 0].tolist()
+            # ring_diff = list(set(indicator_2) - set(indicator_1))
+            # seed_bf += np.array(ring_diff)[dist[ring_diff] > 0].tolist()
 
             # assert np.unique(distance[indicator]).shape[0] == 1, 'overwriting branches'
 
-            branch_dist[indicator_2] = dist[indicator_2]
+            # branch_dist[indicator_2] = dist[indicator_2]
 
         # mark region inside bifurcation
-        bf_ids = region_grow(surf, seed_bf, branch_cut)
+        # bf_ids = region_grow(surf, seed_bf, bifurcation_id)
+    bifurcation_id = -1 * np.ones(surf.GetNumberOfPoints())
+    branch_dist = np.zeros(surf.GetNumberOfPoints())
+    region_grow_simultaneous(surf, rings, bifurcation_id, branch_dist)
 
-        distance[bf_ids] = 1
-        indicator = branch_dist != -1
-        distance[indicator] = branch_dist[indicator]
+    # distance[bf_ids] = 1
+    # indicator = branch_dist != -1
+    # distance[indicator] = branch_dist[indicator]
+
+
+
 
     # assemble cutting array
     out = vtk.vtkDoubleArray()
@@ -147,10 +166,16 @@ def split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol):
     surf.GetPointData().AddArray(out)
     out = vtk.vtkDoubleArray()
     out.SetNumberOfValues(surf.GetNumberOfPoints())
-    out.SetName('branch_cuts')
+    out.SetName('BifurcationIdTmp')
     for i in range(surf.GetNumberOfPoints()):
-        out.SetValue(i, branch_cut[i])
+        out.SetValue(i, bifurcation_id[i])
     surf.GetPointData().AddArray(out)
+
+    append = vtk.vtkAppendFilter()
+    append.AddInputData(surf)
+    append.MergePointsOn()
+    append.Update()
+    return append.GetOutput()
 
     # assemble cutting array
     out = vtk.vtkDoubleArray()
@@ -202,11 +227,11 @@ def main(db, geometries):
         fpath_sect = db.get_section_path(geo)
         fpath_vol = db.get_volume(geo)
 
-        try:
-            surf_cut = split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol)
-        except Exception as e:
-            print(e)
-            continue
+        # try:
+        surf_cut = split_geo(fpath_surf, fpath_cent, fpath_sect, fpath_vol)
+        # except Exception as e:
+        #     print(e)
+        #     continue
 
         write_geo(db.get_surfaces_cut_path(geo), surf_cut)
 
