@@ -3,7 +3,7 @@
 import numpy as np
 import sys
 import argparse
-import scipy
+import scipy.interpolate
 import pdb
 
 import matplotlib.pyplot as plt
@@ -116,7 +116,7 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
 
             lg = []
             for m in post.models:
-                ax[i, j].plot(time['3d'], res[c][f][m + '_cap'] * post.convert[f], post.styles[m])
+                ax[i, j].plot(time[m], res[c][f][m + '_cap'] * post.convert[f], post.styles[m])
                 lg.append(m.upper())
 
             ax[i, j].legend(lg)
@@ -258,22 +258,25 @@ def calc_error(db, opt, geo, res, time):
     maxi = defaultdict(lambda: defaultdict(dict))
     for f in post.fields:
         for c in caps:
-            # interpolate 3d results to 1d path
-            # interp = scipy.interpolate.interp1d(res['path'][c]['3d'], res[c][f]['3d_int'])
-            # res_3d = interp(res['path'][c]['1d'])
-
-            # interpolate 1d results to 3d path (allow extrapolation due to round-off errors at bounds)
+            # interpolate in space: 1d to 3d (allow extrapolation due to round-off errors at bounds)
             interp = scipy.interpolate.interp1d(res[c]['1d_path'], res[c][f]['1d_int'].T, fill_value='extrapolate')
             res_1d = interp(res[c]['3d_path'])
 
+            # interpolate in time: 3d to 1d (allow extrapolation due to round-off errors at bounds)
+            interp = scipy.interpolate.interp1d(time['3d'], res[c][f]['3d_int'], fill_value='extrapolate')
+            res_3d = interp(time['1d']).T
+
             # difference in interior
-            # delta[f][c]['int'] = np.linalg.norm(res_3d - res[c][f]['1d_int'], axis=1) * post.convert[f]
-            delta[f][c]['int'] = np.mean(np.abs(res_1d - res[c][f]['3d_int'].T), axis=1) * post.convert[f]
+            delta[f][c]['int'] = np.mean(np.abs(res_1d - res_3d), axis=1) * post.convert[f]
             mean[f][c]['int'] = np.mean(res[c][f]['3d_int'].T) * post.convert[f]
             maxi[f][c]['int'] = np.max(res[c][f]['3d_int'].T) * post.convert[f]
 
+            # interpolate in time: 3d to 1d (allow extrapolation due to round-off errors at bounds)
+            interp = scipy.interpolate.interp1d(time['3d'], res[c][f]['3d_cap'], fill_value='extrapolate')
+            res_3d = interp(time['1d']).T
+
             # difference at caps
-            delta[f][c]['caps'] = (res[c][f]['3d_cap'] - res[c][f]['1d_cap']) ** 2 * post.convert[f]
+            delta[f][c]['caps'] = (res_3d - res[c][f]['1d_cap']) ** 2 * post.convert[f]
             mean[f][c]['caps'] = np.mean(res[c][f]['3d_cap'].T) * post.convert[f]
             maxi[f][c]['caps'] = np.max(res[c][f]['3d_cap'].T) * post.convert[f]
 

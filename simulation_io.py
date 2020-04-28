@@ -23,7 +23,7 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
-import sv_1d_simulation as oned
+# import sv_1d_simulation as oned
 
 
 def read_results_1d(res_dir, params_file=None):
@@ -126,7 +126,7 @@ def get_time(res_1d, res_3d):
     dt = 1e-3
     step_cycle = int(time['3d'][-1] // dt)
     tmax = step_cycle * dt
-    time['1d'] = np.arange(0, tmax, dt)
+    # time['1d'] = np.arange(0, tmax, dt)
     time['step_cycle'] = step_cycle
     time['n_cycle'] = n_cycle
 
@@ -138,6 +138,11 @@ def get_time(res_1d, res_3d):
     # 3d-time moved to the last full 1d cycle (for interpolation)
     n_cycle_1d = max(1, int(time['1d_all'][-1] // res_3d['time'][-1]))
     time['3d_last_1d'] = res_3d['time'] + (n_cycle_1d - 1) * res_3d['time'][-1]
+
+    # 1d time steps for last cycle
+    t_1d_first = res_3d['time'][-1] * (n_cycle_1d - 1)
+    time['1d_last_cycle_i'] = time['1d_all'] >= t_1d_first
+    time['1d'] = time['1d_all'][time['1d_last_cycle_i']] - t_1d_first
 
     return time
 
@@ -276,9 +281,9 @@ def collect_results(f_res_1d, f_res_3d, f_1d_model, f_outlet):
             if 'path' not in f:
                 res[c][f]['1d_all'] = res[c][f]['1d_cap']
                 res[c][f]['3d_all'] = res[c][f]['3d_cap']
-                for m in ['1d_int', '1d_cap']:
-                    interp = scipy.interpolate.interp1d(time['1d_all'], res[c][f][m], bounds_error=False)
-                    res[c][f][m] = interp(time['3d_last_1d'])
+
+                res[c][f]['1d_int'] = res[c][f]['1d_int'][:, time['1d_last_cycle_i']]
+                res[c][f]['1d_cap'] = res[c][f]['1d_cap'][time['1d_last_cycle_i']]
 
     return res, time
 
