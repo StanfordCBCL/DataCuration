@@ -141,8 +141,11 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
     fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=opt['sharey'])
 
-    # pick time step
-    t_max = np.argmax(res['inflow']['flow']['3d_cap'])
+    # pick 3d time step with highest inflow
+    t_max = {'3d': np.argmax(res['inflow']['flow']['3d_cap'])}
+
+    # pick closest 1d time step
+    t_max['1d'] = np.argmin(np.abs(time['3d'][t_max['3d']] - time['1d']))
 
     for i, f in enumerate(post.fields):
         for j, c in enumerate(caps):
@@ -159,7 +162,7 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
             lg = []
             for m in post.models:
-                ax[i, j].plot(res[c][m + '_path'], res[c][f][m + '_int'][:, t_max] * post.convert[f], post.styles[m])
+                ax[i, j].plot(res[c][m + '_path'], res[c][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
                 lg.append(m)
 
             ax[i, j].legend(lg)
@@ -254,8 +257,7 @@ def calc_error(db, opt, geo, res, time):
 
     # all differences over time
     delta = defaultdict(lambda: defaultdict(dict))
-    mean = defaultdict(lambda: defaultdict(dict))
-    maxi = defaultdict(lambda: defaultdict(dict))
+    norm = defaultdict(lambda: defaultdict(dict))
     for f in post.fields:
         for c in caps:
             # interpolate in space: 1d to 3d (allow extrapolation due to round-off errors at bounds)
@@ -267,20 +269,18 @@ def calc_error(db, opt, geo, res, time):
             res_3d = interp(time['1d']).T
 
             # difference in interior
-            delta[f][c]['int'] = np.mean(np.abs(res_1d - res_3d), axis=1) * post.convert[f]
-            mean[f][c]['int'] = np.mean(res[c][f]['3d_int'].T) * post.convert[f]
-            maxi[f][c]['int'] = np.max(res[c][f]['3d_int'].T) * post.convert[f]
+            delta[f][c]['int'] = np.mean(np.abs(res_3d - res_1d), axis=1) * post.convert[f]
+            norm[f][c]['int'] = np.mean(np.max(res_3d, axis=0) - np.min(res_3d, axis=0)) * post.convert[f]
 
             # interpolate in time: 3d to 1d (allow extrapolation due to round-off errors at bounds)
             interp = scipy.interpolate.interp1d(time['3d'], res[c][f]['3d_cap'], fill_value='extrapolate')
             res_3d = interp(time['1d']).T
 
             # difference at caps
-            delta[f][c]['caps'] = (res_3d - res[c][f]['1d_cap']) ** 2 * post.convert[f]
-            mean[f][c]['caps'] = np.mean(res[c][f]['3d_cap'].T) * post.convert[f]
-            maxi[f][c]['caps'] = np.max(res[c][f]['3d_cap'].T) * post.convert[f]
+            delta[f][c]['caps'] = np.mean(np.abs(res_3d - res[c][f]['1d_cap']), axis=0) * post.convert[f]
+            norm[f][c]['caps'] = np.mean(np.max(res_3d, axis=0) - np.min(res_3d, axis=0)) * post.convert[f]
 
-    # mean difference over time
+    # get delta over time
     err = {}
     for f in post.fields:
         err[f] = {}
@@ -289,11 +289,15 @@ def calc_error(db, opt, geo, res, time):
             for name in delta[f][c].keys():
                 err[f][c][name] = {}
                 err[f][c][name]['mean'] = {}
-                err[f][c][name]['mean']['abs'] = np.mean(np.sqrt(delta[f][c][name]))
-                err[f][c][name]['mean']['rel'] = np.mean(np.sqrt(delta[f][c][name])) / np.mean(mean[f][c][name])
+                err[f][c][name]['mean']['abs'] = np.mean(delta[f][c][name])
                 err[f][c][name]['max'] = {}
-                err[f][c][name]['max']['abs'] = np.max(np.sqrt(delta[f][c][name]))
-                err[f][c][name]['max']['rel'] = np.max(np.sqrt(delta[f][c][name])) / np.max(np.abs(maxi[f][c][name]))
+                err[f][c][name]['max']['abs'] = np.max(delta[f][c][name])
+
+                for metric in ['mean', 'max']:
+                    if f == 'area':
+                        err[f][c][name][metric]['rel'] = err[f][c][name][metric]['abs'] / np.mean(err[f][c][name][metric]['abs'])
+                    else:
+                        err[f][c][name][metric]['rel'] = err[f][c][name][metric]['abs'] / norm[f][c][name]
 
     # mean difference over caps
     for f in post.fields:
