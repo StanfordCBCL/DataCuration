@@ -3,42 +3,33 @@
 import os
 import sys
 import pdb
-import shutil
-import subprocess
 import tempfile
-import vtk
+import shutil
 
-from collections import OrderedDict
-import numpy as np
-
-from get_database import Database, SimVascular, input_args
-from vtk_functions import ClosestPoints, read_geo, write_geo
-from vmtk import vtkvmtk, vmtkscripts
+from get_database import Database, input_args
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
-from sv_1d_simulation import Centerlines
+from sv_1d_simulation import centerlines
 
 
 class Params(object):
     """
     Minimal parameter set for get_inlet_outlet_centers function in Centerlines class
     """
-    def __init__(self, surf_dir, inflow, surf):
-        self.boundary_surfaces_dir = surf_dir
-        self.inlet_face_input_file = inflow
-        self.surface_model = surf
-        self.output_directory = '/home/pfaller'
-        self.CENTERLINES_OUTLET_FILE_NAME = 'bla'
+    def __init__(self, p):
+        self.boundary_surfaces_dir = p['f_surf_caps']
+        self.inlet_face_input_file = p['f_inflow']
+        self.surface_model = p['f_surf_in']
+        self.output_directory = os.path.dirname(p['f_outlet'])
+        self.CENTERLINES_OUTLET_FILE_NAME = os.path.basename(p['f_outlet'])
+        self.centerlines_output_file = p['f_cent_out_vmtk']
+        self.cent_out = p['f_cent_out']
+        self.surf_out = p['f_surf_out']
+        self.sections_out = p['f_sections_out']
 
 
 def main(db, geometries):
-    # SimVascular instance
-    sv = SimVascular()
-
-    # Centerline instance
-    cl = Centerlines()
-
     for geo in geometries:
         print('Running geometry ' + geo)
 
@@ -46,43 +37,26 @@ def main(db, geometries):
             continue
 
         # get model paths
-        p = OrderedDict()
-        p['surf_in'] = db.get_surfaces(geo, 'all_exterior')
-        p['surf_out'] = db.get_surfaces_grouped_path(geo)
-        p['sections'] = db.get_section_path(geo)
-        p['cent'] = db.get_centerline_path(geo)
+        params = {'f_surf_in': db.get_surfaces(geo, 'all_exterior'),
+                  'f_surf_caps': tempfile.mkdtemp(),
+                  'f_inflow': os.path.basename(db.get_surfaces(geo, 'inflow')),
+                  'f_outlet': db.get_centerline_outlet_path(geo),
+                  'f_cent_out_vmtk': db.get_centerline_vmtk_path(geo),
+                  'f_cent_out': db.get_centerline_path(geo),
+                  'f_surf_out': db.get_surfaces_grouped_path(geo),
+                  'f_sections_out': db.get_section_path(geo)}
 
         # copy cap surfaces to temp folder
-        fpath_surf = tempfile.mkdtemp()
         for f in db.get_surfaces(geo, 'caps'):
-            shutil.copy2(f, fpath_surf)
+            shutil.copy2(f, params['f_surf_caps'])
 
-        # get inlet and outlet centers
-        params = Params(fpath_surf, os.path.basename(db.get_surfaces(geo, 'inflow')), p['surf_in'])
-        cl.get_inlet_outlet_centers(params)
+        params = Params(params)
 
-        # find corresponding point id
-        cp = ClosestPoints(p['surf_in'])
-        caps = np.vstack((cl.inlet_center, np.array(cl.outlet_centers).reshape(-1, 3)))
-        id_caps = cp.search(caps)
-
-        p['caps'] = repr(id_caps).replace(' ', '')
-
-        # write outlet names to file
-        with open(db.get_centerline_outlet_path(geo), 'w+') as f:
-            for s in cl.outlet_face_names:
-                f.write(s + '\n')
-
-        # assemble call string
-        sv_string = [os.path.join(os.getcwd(), 'sv_get_centerline.py')]
-        for v in p.values():
-            sv_string += [v]
-
-        # execute SimVascular-Python
-        sv.run_python(sv_string)
-
-        # remove temp dir
-        shutil.rmtree(fpath_surf)
+        # call SimVascular centerline extraction
+        cl = centerlines.Centerlines()
+        cl.extract_center_lines(params)
+        cl.extract_branches(params)
+        cl.write_outlet_face_names(params)
 
 
 if __name__ == '__main__':
