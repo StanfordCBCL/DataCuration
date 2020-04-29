@@ -11,13 +11,12 @@ import argparse
 import pdb
 
 import numpy as np
-import scipy.interpolate
 from collections import OrderedDict
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-from get_bcs import get_bcs, get_in_model_units
+from get_bcs import get_bcs, get_params, get_in_model_units
 from vtk_functions import read_geo
 from common import get_dict
 
@@ -70,6 +69,8 @@ class Database:
 
         # folder for tcl files with boundary conditions
         self.fpath_bc = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/repos_ready_cpm_scripts'
+
+        self.fpath_need_sim = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/need_sim_cpm_scripts'
 
         # folder for simulation files
         self.fpath_sim = '/home/pfaller/work/osmsc/data_uploaded'
@@ -231,11 +232,22 @@ class Database:
             raise Exception('Unknown selection ' + name)
         return geometries
 
+    def get_params(self, geo):
+        # try to find params in these folders
+        paths = [self.fpath_bc, self.fpath_need_sim]
+        for p in paths:
+            for o in [-1, 0, -1001]:
+                tcl, _ = get_tcl_paths(p, geo, o)
+                if os.path.exists(tcl):
+                    return get_params(tcl)
+
+        return None
+
     def get_bcs(self, geo):
         # try two different offsets of tcl name vs geo name
         # todo: find out why there are several variants
         for o in [-1, 0, -1001]:
-            tcl, tcl_bc = self.get_tcl_paths(geo, o)
+            tcl, tcl_bc = get_tcl_paths(self.fpath_bc, geo, o)
             if os.path.exists(tcl) and os.path.exists(tcl_bc):
                 return get_bcs(tcl, tcl_bc)
         return None, None
@@ -270,12 +282,6 @@ class Database:
 
     def get_img(self, geo):
         return exists(os.path.join(self.fpath_sim, geo, 'image_data', 'vti', 'OSMSC' + geo[:4] + '-cm.vti'))
-
-    def get_tcl_paths(self, geo, offset):
-        assert len(geo) == 9 and geo[4] == '_' and is_int(geo[:4]) and is_int(geo[5:]), geo + ' not in OSMSC format'
-        ids = geo.split('_')
-        geo_bc = ids[0] + '_' + str(int(ids[1]) + offset).zfill(4)
-        return os.path.join(self.fpath_bc, geo_bc + '.tcl'), os.path.join(self.fpath_bc, geo_bc + '-bc.tcl')
 
     def get_surface_dir(self, geo):
         return os.path.join(self.fpath_gen, 'surfaces', geo)
@@ -536,7 +542,8 @@ class SimVascular:
     def __init__(self):
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
-        self.onedsolver = '/home/pfaller/work/repos/oneDSolver_coronary/build/bin/OneDSolver'
+        # self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
+        self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build_superlu/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
@@ -549,7 +556,7 @@ class SimVascular:
         subprocess.run([self.svsolver, run_file], cwd=run_folder)
 
     def run_solver_1d(self, run_folder, run_file='solver.inp'):
-        run_command(run_folder, [self.onedsolver, run_file])
+        run_command(run_folder, [self.onedsolver, run_file])#'mpirun', '-np', '4',
         return ' ', True
 
     def run_python(self, command):
@@ -571,6 +578,13 @@ class SimVascular:
         print(out_str)
         # return subprocess.run(['gdb', self.sv_debug])
 
+
+def get_tcl_paths(fpath, geo, offset):
+    assert len(geo) == 9 and geo[4] == '_' and is_int(geo[:4]) and is_int(geo[5:]), geo + ' not in OSMSC format'
+    ids = geo.split('_')
+    geo_bc = ids[0] + '_' + str(int(ids[1]) + offset).zfill(4)
+    return os.path.join(fpath, geo_bc + '.tcl'), os.path.join(fpath, geo_bc + '-bc.tcl')
+
 class SVProject:
     def __init__(self):
         self.dir = {'images': 'Images', 'paths': 'Paths', 'segmentations': 'Segmentations', 'models': 'Models',
@@ -582,7 +596,7 @@ class Post:
     def __init__(self):
         self.fields = ['pressure', 'flow', 'area']#
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
-        self.styles = {'3d': '-', '1d': '--', '0d': ':'}
+        self.styles = {'3d': '-', '1d': '-', '0d': ':'}
         self.colors = {'3d': 'C0', '1d': 'C1', 'r': 'C2'}
 
         self.cgs2mmhg = 7.50062e-4
