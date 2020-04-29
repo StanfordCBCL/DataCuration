@@ -12,6 +12,7 @@ import sys
 import argparse
 
 import numpy as np
+from scipy.interpolate import CubicSpline
 
 from get_database import Database, SimVascular, Post, input_args
 from get_sim import write_bc
@@ -29,7 +30,7 @@ def generate_1d(db, geo):
     n_cycle = 10
 
     # sub-segment size
-    seg_min_num = 2
+    seg_min_num = 1
     seg_size = 999
 
     # FEM size
@@ -102,10 +103,15 @@ def generate_1d(db, geo):
     time = np.insert(time, 0, 0)
     inflow = np.insert(inflow, 0, inflow[-1])
 
+    # smoothly interpolate to finer time step
+    interp = CubicSpline(time, inflow, bc_type='periodic')
+    time_interp = np.linspace(0, time[-1], 1000)
+    inflow_interp = interp(time_interp)
+
     # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
     if geo == '0069_0001':
         inflow *= -1
-    np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time, - inflow)).T)
+    np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time_interp, - inflow_interp)).T)
 
     # set simulation time as end of 3d simulation
     save_data_freq = 1
