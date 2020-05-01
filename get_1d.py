@@ -12,10 +12,10 @@ import sys
 import argparse
 
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, interp1d
 
 from get_database import Database, SimVascular, Post, input_args
-from get_sim import write_bc
+from get_sv_project import write_bc
 from simulation_io import read_results_1d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
@@ -103,10 +103,23 @@ def generate_1d(db, geo):
     time = np.insert(time, 0, 0)
     inflow = np.insert(inflow, 0, inflow[-1])
 
-    # smoothly interpolate to finer time step
-    interp = CubicSpline(time, inflow, bc_type='periodic')
-    time_interp = np.linspace(0, time[-1], 1000)
-    inflow_interp = interp(time_interp)
+    # linearly interpolate at 256 time points
+    interp = interp1d(time, inflow, fill_value="extrapolate")
+    time_interp = np.linspace(0, time[-1], 257)[:-1]
+    inflow_interp_lin = interp(time_interp)
+
+    # fourier smoothing
+    n_mode = 10
+    inflow_fft = np.fft.rfft(inflow_interp_lin)
+    # inflow_fft = np.fft.rfft(inflow_interp_lin)
+    inflow_fft[n_mode:] = 0
+    inflow_interp = np.fft.irfft(inflow_fft)
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    ax.plot(time, inflow)
+    ax.plot(time_interp, inflow_interp)
+    plt.show()
 
     # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
     if geo == '0069_0001':
