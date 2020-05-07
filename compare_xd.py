@@ -12,11 +12,12 @@ from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationB
 from collections import OrderedDict, defaultdict
 
 from get_database import Database, Post, input_args
-from simulation_io import collect_results_db
+from simulation_io import collect_results_db_1d_3d, collect_results_db_3d_3d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
 import sv_1d_simulation as oned
+
 
 def add_image(db, geo, fig):
     im = plt.imread(db.get_png(geo))
@@ -141,11 +142,14 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
     fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=opt['sharey'])
 
-    # pick 3d time step with highest inflow
-    t_max = {'3d': np.argmax(res['inflow']['flow']['3d_cap'])}
+    # pick reference time step with highest inflow
+    m_ref = '3d'
+    t_max = {m_ref: np.argmax(res['inflow']['flow'][m_ref + '_cap'])}
 
-    # pick closest 1d time step
-    t_max['1d'] = np.argmin(np.abs(time['3d'][t_max['3d']] - time['1d']))
+    # pick closest time step for other models
+    for m in post.models:
+        if m != m_ref:
+            t_max[m] = np.argmin(np.abs(time[m_ref][t_max[m_ref]] - time[m]))
 
     for i, f in enumerate(post.fields):
         for j, c in enumerate(caps):
@@ -316,11 +320,20 @@ def calc_error(db, opt, geo, res, time):
 
 
 def main(db, geometries):
+    # get post-processing constants
+    post = Post()
+
     for geo in geometries:
         print('Comparing geometry ' + geo)
 
         # read results
-        res, time = collect_results_db(db, geo)
+        if '3d' in post.models and '1d' in post.models:
+            res, time = collect_results_db_1d_3d(db, geo)
+        if '3d' in post.models and '3d_rerun' in post.models:
+            res, time = collect_results_db_3d_3d(db, geo)
+        else:
+            raise ValueError('Unknown combination of models')
+
         if res is None:
             continue
 
@@ -334,7 +347,8 @@ def main(db, geometries):
                'h': 2 * (len(Post().fields) * 1 + 1)}
 
         # calculate error
-        calc_error(db, opt, geo, res, time)
+        if '3d' in post.models and '1d' in post.models:
+            calc_error(db, opt, geo, res, time)
 
         # generate plots
         print('plotting')

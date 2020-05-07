@@ -298,8 +298,17 @@ class Database:
     def get_3d_flow(self, geo):
         return os.path.join(self.fpath_gen, '3d_flow', geo + '.vtp')
 
+    def get_3d_flow_rerun(self, geo):
+        return self.gen_file('3d_flow', geo, 'vtp')
+
+    def get_sv_flow_path(self, geo, model):
+        return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['flow'], 'inflow_' + model + '.flow')
+
     def get_centerline_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines', geo + '.vtp')
+
+    def get_centerline_vmtk_path(self, geo):
+        return os.path.join(self.fpath_gen, 'centerlines_vmtk', geo + '.vtp')
 
     def get_centerline_outlet_path(self, geo):
         return os.path.join(self.fpath_gen, 'centerlines', 'outlets_' + geo)
@@ -321,6 +330,9 @@ class Database:
 
     def get_bifurcation_path(self, geo):
         return os.path.join(self.fpath_gen, 'bifurcation_pressure', geo + '.vtp')
+
+    def get_initial_conditions(self, geo):
+        return os.path.join(self.fpath_gen, 'initial_conditions', geo + '.vtu')
 
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
@@ -375,6 +387,12 @@ class Database:
         fdir = self.get_svproj_dir(geo)
         return os.path.join(fdir, '.svproj')
 
+    def get_svpre_file(self, geo):
+        return os.path.join(self.get_solve_dir_3d(geo), 'sim.svpre')
+
+    def get_solver_file(self, geo):
+        return os.path.join(self.get_solve_dir_3d(geo), 'solver.inp')
+
     def get_svproj_mdl_file(self, geo):
         return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['models'], geo + '.mdl')
 
@@ -411,6 +429,19 @@ class Database:
     # todo: adapt to units?
     def get_seg_dir(self, geo):
         return os.path.join(self.get_seg_path(geo), geo + '_groups-cm')
+
+    def get_inflow(self, geo):
+        # read inflow conditions
+        flow = np.load(self.get_bc_flow_path(geo), allow_pickle=True).item()
+
+        # read 3d boundary conditions
+        bc_def, _ = self.get_bcs(geo)
+
+        # extract inflow data
+        time = flow['time']
+        inflow = flow['velocity'][:, int(bc_def['preid']['inflow']) - 1]
+
+        return time, inflow
 
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
@@ -515,25 +546,6 @@ class Database:
 
         return constants
 
-    def copy_files(self, geo):
-        # define paths
-        fpath_surf = os.path.join(self.get_solve_dir_3d(geo), 'mesh-complete', 'mesh-surfaces')
-
-        # create simulation folder
-        os.makedirs(fpath_surf, exist_ok=True)
-
-        # copy generic solver settings
-        shutil.copy('solver.inp', self.get_solve_dir_3d(geo))
-
-        # copy geometry
-        for f in glob.glob(os.path.join(self.fpath_gen, 'surfaces', geo, '*.vtp')):
-            shutil.copy(f, fpath_surf)
-
-        # copy volume mesh
-        # todo: copy without results
-        fpath_res = os.path.join(self.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
-        shutil.copy(fpath_res, os.path.join(self.get_solve_dir_3d(geo), 'mesh-complete'))
-
 
 class SimVascular:
     """
@@ -588,23 +600,24 @@ def get_tcl_paths(fpath, geo, offset):
 class SVProject:
     def __init__(self):
         self.dir = {'images': 'Images', 'paths': 'Paths', 'segmentations': 'Segmentations', 'models': 'Models',
-                    'meshes': 'Meshes', 'simulations': 'Simulations'}
+                    'meshes': 'Meshes', 'simulations': 'Simulations', 'flow': 'flow-files'}
         self.t = '    '
 
 
 class Post:
     def __init__(self):
-        self.fields = ['pressure', 'flow', 'area']#
+        self.fields = ['pressure', 'flow', 'area']
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
-        self.styles = {'3d': '-', '1d': '-', '0d': ':'}
-        self.colors = {'3d': 'C0', '1d': 'C1', 'r': 'C2'}
+        self.styles = {'3d': '-', '3d_rerun': '-', '1d': '-', '0d': ':'}
+        self.colors = {'3d': 'C0', '3d_rerun': 'C1', '1d': 'C1', 'r': 'C2'}
 
         self.cgs2mmhg = 7.50062e-4
         self.mlps2lph = 60 / 1000
         self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
 
         # sets the plot order
-        self.models = ['3d', '1d'] #'0d',
+        # self.models = ['3d', '1d']
+        self.models = ['3d', '3d_rerun']
 
 
 def run_command(run_folder, command):
