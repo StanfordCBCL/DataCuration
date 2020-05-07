@@ -63,12 +63,13 @@ def get_integral(inp_3d, origin, normal):
     return Integration(inp)
 
 
-def extract_results(fpath_1d, fpath_3d):
+def extract_results(fpath_1d, fpath_3d, fpath_out):
     """
     Extract 3d results at 1d model nodes (integrate over cross-section)
     Args:
         fpath_1d: path to 1d model
         fpath_3d: path to 3d simulation results
+        fpath_out: output path
 
     Returns:
         res: dictionary of results in all branches, in all segments for all result arrays
@@ -77,33 +78,37 @@ def extract_results(fpath_1d, fpath_3d):
         return None
 
     # read 1d and 3d model
-    reader_1d = read_geo(fpath_1d)
-    reader_3d = read_geo(fpath_3d)
+    reader_1d = read_geo(fpath_1d).GetOutput()
+    reader_3d = read_geo(fpath_3d).GetOutput()
 
     # get all result array names
     res_names = get_res_names(reader_3d, ['pressure', 'velocity'])
 
     # get point and normals from centerline
-    points = v2n(reader_1d.GetOutput().GetPoints().GetData())
-    normals = v2n(reader_1d.GetOutput().GetPointData().GetArray('CenterlineSectionNormal'))
-    gid = v2n(reader_1d.GetOutput().GetPointData().GetArray('GlobalNodeId'))
+    points = v2n(reader_1d.GetPoints().GetData())
+    normals = v2n(reader_1d.GetPointData().GetArray('CenterlineSectionNormal'))
+    gid = v2n(reader_1d.GetPointData().GetArray('GlobalNodeId'))
 
     # initialize output
     for name in res_names + ['area']:
         array = vtk.vtkDoubleArray()
         array.SetName(name)
-        array.SetNumberOfValues(reader_1d.GetOutput().GetNumberOfPoints())
+        array.SetNumberOfValues(reader_1d.GetNumberOfPoints())
         array.Fill(0)
-        reader_1d.GetOutput().GetPointData().AddArray(array)
+        reader_1d.GetPointData().AddArray(array)
 
     # move points on caps slightly to ensure nice integration
     ids = vtk.vtkIdList()
     eps_norm = 1.0e-3
 
     # integrate results on all points of intergration cells
-    for i in range(reader_1d.GetOutput().GetNumberOfPoints()):
+    for i in range(reader_1d.GetNumberOfPoints()):
+        # print progress
+        if (i + 1) % (reader_1d.GetNumberOfPoints() // 10) == 0:
+            print('  ' + str((i + i) * 100 // reader_1d.GetNumberOfPoints()) + '%')
+
         # check if point is cap
-        reader_1d.GetOutput().GetPointCells(i, ids)
+        reader_1d.GetPointCells(i, ids)
         if ids.GetNumberOfIds() == 1:
             if gid[i] == 0:
                 # inlet
@@ -117,10 +122,10 @@ def extract_results(fpath_1d, fpath_3d):
 
         # integrate all output arrays
         for name in res_names:
-            reader_1d.GetOutput().GetPointData().GetArray(name).SetValue(i, integral.evaluate(name))
-        reader_1d.GetOutput().GetPointData().GetArray('area').SetValue(i, integral.area())
+            reader_1d.GetPointData().GetArray(name).SetValue(i, integral.evaluate(name))
+        reader_1d.GetPointData().GetArray('area').SetValue(i, integral.area())
 
-    return reader_1d.GetOutput()
+    write_geo(fpath_out, reader_1d)
 
 
 def main(db, geometries):
@@ -132,20 +137,18 @@ def main(db, geometries):
 
         fpath_1d = db.get_centerline_path(geo)
         fpath_3d = db.get_volume(geo)
+        fpath_out = db.get_3d_flow_path_oned_vtp(geo)
 
-        if os.path.exists(db.get_3d_flow_path_oned_vtp(geo)):
-            print('  Already exists. Skipping...')
-            continue
+        # if os.path.exists(db.get_3d_flow_path_oned_vtp(geo)):
+        #     print('  Already exists. Skipping...')
+        #     continue
 
         # extract 3d results integrated over cross-section
         try:
-            res = extract_results(fpath_1d, fpath_3d)
+            extract_results(fpath_1d, fpath_3d, fpath_out)
         except Exception as e:
             print(e)
             continue
-
-        if res is not None:
-            write_geo(db.get_3d_flow_path_oned_vtp(geo), res)
 
 
 if __name__ == '__main__':
