@@ -12,34 +12,37 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_database import Database, input_args
 from vtk_functions import Integration, read_geo, write_geo, threshold, calculator, cut_plane
+from vtk_to_xdmf import split
 
 
-def transfer_solution(node_surf, node_vol, res_fields):
+def transfer_solution(node_trg, node_src, res_fields):
     """
     Transfer point data from volume mesh to surface mesh using GlobalNodeID
     Args:
-        node_surf: surface mesh
-        node_vol: volume mesh
+        node_trg: surface mesh
+        node_src: volume mesh
         res_fields: point data names to transfer
     """
     # get global node ids in both meshes
-    nd_id_surf = v2n(node_surf.GetArray('GlobalNodeID')).astype(int)
-    nd_id_vol = v2n(node_vol.GetArray('GlobalNodeID')).astype(int)
+    nd_id_trg = v2n(node_trg.GetArray('GlobalNodeID')).astype(int)
+    nd_id_src = v2n(node_src.GetArray('GlobalNodeID')).astype(int)
 
     # map volume mesh to surface mesh
-    mask = np.searchsorted(nd_id_vol, nd_id_surf)
+    index = np.argsort(nd_id_src)
+    search = np.searchsorted(nd_id_src[index], nd_id_trg)
+    mask = index[search]
 
     # transfer results from volume mesh to surface mesh
-    for i in range(node_vol.GetNumberOfArrays()):
-        res_name = node_vol.GetArrayName(i)
+    for i in range(node_src.GetNumberOfArrays()):
+        res_name = node_src.GetArrayName(i)
         if res_name.split('_')[0] in res_fields:
             # read results from volume mesh
-            res = v2n(node_vol.GetArray(res_name))
+            res = v2n(node_src.GetArray(res_name))
 
             # create array to output surface mesh results
             out_array = n2v(res[mask])
             out_array.SetName(res_name)
-            node_surf.AddArray(out_array)
+            node_trg.AddArray(out_array)
 
 
 def sort_faces(res_faces, area):
@@ -55,7 +58,8 @@ def sort_faces(res_faces, area):
     # get time steps
     times = []
     for n in res_faces[list(res_faces)[0]].keys():
-        times.append(float(n.split('_')[1]))
+        time, _ = split(n)
+        times.append(time)
     times = np.unique(np.array(times))
 
     # sort data in arrays according to time steps
@@ -64,7 +68,7 @@ def sort_faces(res_faces, area):
 
     for f, f_res in res_faces.items():
         for res_name, res in f_res.items():
-            name, time = res_name.split('_')
+            time, name = split(res_name)
             if name not in res_array:
                 res_array[name] = np.zeros(dim)
             res_array[name][float(time) == times, f - 1] = res
