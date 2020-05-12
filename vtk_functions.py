@@ -5,6 +5,7 @@ import vtk
 import pdb
 
 import numpy as np
+from collections import defaultdict
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
@@ -109,8 +110,8 @@ def collect_arrays(output):
 
 def get_all_arrays(geo):
     # collect all arrays
-    cell_data = collect_arrays(geo.GetOutput().GetCellData())
-    point_data = collect_arrays(geo.GetOutput().GetPointData())
+    cell_data = collect_arrays(geo.GetCellData())
+    point_data = collect_arrays(geo.GetPointData())
 
     return point_data, cell_data
 
@@ -213,7 +214,7 @@ def cut_plane(inp, origin, normal):
 
     # define cutter
     cut = vtk.vtkCutter()
-    cut.SetInputData(inp.GetOutput())
+    cut.SetInputData(inp)
     cut.SetCutFunction(plane)
     cut.Update()
     return cut
@@ -426,9 +427,35 @@ def grow(geo, array, pids_in, pids_all, cids_all):
             # loop all points in cell
             for k in range(pids.GetNumberOfIds()):
 
-                # add point oonly if it's new and doesn't fullfill stopping criterion
+                # add point only if it's new and doesn't fullfill stopping criterion
                 if array[pids.GetId(k)] == -1 and pids_in.IsId(pids.GetId(k)) == -1:
                     pids_out.InsertUniqueId(pids.GetId(k))
                     pids_all.InsertUniqueId(pids.GetId(k))
 
     return pids_out
+
+
+def cell_connectivity(geo):
+    """
+    Extract the point connectivity from vtk and return a dictionary that can be used in meshio
+    """
+    vtk_to_meshio = {3: 'line', 5: 'triangle', 10: 'tetra'}
+
+    cells = defaultdict(list)
+    for i in range(geo.GetNumberOfCells()):
+        cell_type_vtk = geo.GetCellType(i)
+        if cell_type_vtk in vtk_to_meshio:
+            cell_type = vtk_to_meshio[cell_type_vtk]
+        else:
+            raise ValueError('vtkCellType ' + str(cell_type_vtk) + ' not supported')
+
+        points = geo.GetCell(i).GetPointIds()
+        point_ids = []
+        for j in range(points.GetNumberOfIds()):
+            point_ids += [points.GetId(j)]
+        cells[cell_type] += [point_ids]
+
+    for t, c in cells.items():
+        cells[t] = np.array(c)
+
+    return cells
