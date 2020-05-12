@@ -145,6 +145,13 @@ def get_bcs(tcl, tcl_bc):
 
     bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname, 'coronary': coronary}
 
+    # close window
+    r_bc.destroy()
+
+    return bcs, get_params(tcl)
+
+
+def get_params(tcl):
     # evaluate tcl-script to extract variables for general simulation parameters
     r = tkinter.Tk()
     r.tk.eval('source ' + tcl)
@@ -155,8 +162,7 @@ def get_bcs(tcl, tcl_bc):
         except:
             pass
 
-    # close windows
-    r_bc.destroy()
+    # close window
     r.destroy()
 
-    return bcs, params
+    return params
