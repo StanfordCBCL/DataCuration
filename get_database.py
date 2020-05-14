@@ -512,7 +512,11 @@ class Database:
         return os.path.join(self.fpath_gen, 'volumes', geo + '.vtu')
 
     def get_outlet_names(self, geo):
-        return self.get_surface_names(geo, 'outlets')
+        bc_def, _ = self.get_bcs(geo)
+        names = [k for k, v in sorted(bc_def['preid'].items(), key=lambda kv: kv[1])]
+        names.remove('wall')
+        names.remove('inflow')
+        return names
 
     def count_inlets(self, geo):
         n_inlet = 0
@@ -554,6 +558,7 @@ class SimVascular:
     def __init__(self):
         self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
         self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
+        self.svpost = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpost'
         # self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build/bin/OneDSolver'
         self.onedsolver = '/home/pfaller/work/repos/oneDSolver/build_superlu/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
@@ -566,6 +571,10 @@ class SimVascular:
 
     def run_solver(self, run_folder, run_file='solver.inp'):
         subprocess.run([self.svsolver, run_file], cwd=run_folder)
+
+    def run_post(self, run_folder, args):
+        subprocess.run([self.svpost] + args, cwd=run_folder, stdout=open(os.devnull, "w"))
+        # run_command(run_folder, [self.svpost, args])
 
     def run_solver_1d(self, run_folder, run_file='solver.inp'):
         run_command(run_folder, [self.onedsolver, run_file])#'mpirun', '-np', '4',
@@ -616,8 +625,8 @@ class Post:
         self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
 
         # sets the plot order
-        # self.models = ['3d', '1d']
-        self.models = ['3d', '3d_rerun']
+        self.models = ['3d', '1d']
+        # self.models = ['3d', '3d_rerun']
 
 
 def run_command(run_folder, command):
