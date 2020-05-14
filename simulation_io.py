@@ -198,7 +198,7 @@ def collect_results(model, res, time, f_res, f_outlet, centerline=None, res3d=No
     geo = read_geo(f_geo)
 
     # extract point and cell arrays from geometry
-    arrays, _ = get_all_arrays(geo)
+    arrays, _ = get_all_arrays(geo.GetOutput())
 
     # get cap->branch map
     caps = get_caps(f_outlet, f_cap)
