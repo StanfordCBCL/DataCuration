@@ -15,7 +15,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline, interp1d
 
 from get_database import Database, SimVascular, Post, input_args
-from get_sv_project import write_bc
+from get_sv_project import write_bc, write_inflow
 from simulation_io import read_results_1d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
@@ -92,39 +92,8 @@ def generate_1d(db, geo):
     # read inflow conditions
     flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
 
-    # read 3d boundary conditions
-    bc_def, _ = db.get_bcs(geo)
-
-    # extract inflow data
-    time = flow['time']
-    inflow = flow['velocity'][:, int(bc_def['preid']['inflow']) - 1]
-
-    # insert last 3d time step as 1d initial condition (periodic solution)
-    time = np.insert(time, 0, 0)
-    inflow = np.insert(inflow, 0, inflow[-1])
-
-    # linearly interpolate at 256 time points
-    interp = interp1d(time, inflow, fill_value="extrapolate")
-    time_interp = np.linspace(0, time[-1], 257)[:-1]
-    inflow_interp_lin = interp(time_interp)
-
-    # fourier smoothing
-    n_mode = 10
-    inflow_fft = np.fft.rfft(inflow_interp_lin)
-    # inflow_fft = np.fft.rfft(inflow_interp_lin)
-    inflow_fft[n_mode:] = 0
-    inflow_interp = np.fft.irfft(inflow_fft)
-
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots()
-    ax.plot(time, inflow)
-    ax.plot(time_interp, inflow_interp)
-    plt.show()
-
-    # save inflow file. sign reverse as compared to 3d simulation (inflow is positive)
-    if geo == '0069_0001':
-        inflow *= -1
-    np.savetxt(os.path.join(fpath_1d, 'inflow.flow'), np.vstack((time_interp, - inflow_interp)).T)
+    # write inflow
+    write_inflow(db, geo, '1d')
 
     # set simulation time as end of 3d simulation
     save_data_freq = 1
@@ -143,7 +112,7 @@ def generate_1d(db, geo):
                  density=constants['density'],
                  element_size=element_size,
                  inlet_face_input_file='inflow.vtp',
-                 inflow_input_file=os.path.join(fpath_1d, 'inflow.flow'),
+                 inflow_input_file=db.get_sv_flow_path(geo, '1d'),
                  linear_material_ehr=1e15,
                  linear_material_pressure=pref,
                  material_model=None,

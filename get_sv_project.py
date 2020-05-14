@@ -8,6 +8,8 @@ import matplotlib.cm as cm
 from collections import OrderedDict, defaultdict
 
 import numpy as np
+from scipy.interpolate import CubicSpline, interp1d
+from scipy.optimize import minimize
 
 from get_database import input_args, Database, SVProject, SimVascular
 from get_bcs import get_in_model_units
@@ -57,14 +59,14 @@ def write_model(db, geo):
 
     # read boundary conditions
     bc_def, _ = db.get_bcs(geo)
-    bc_def['spid']['wall'] = 0
+    bc_def['preid']['wall'] = 0
 
     # get cap names
     caps = db.get_surface_names(geo, 'caps')
     caps += ['wall']
 
     # sort caps according to face id
-    ids = np.array([repr(int(float(bc_def['spid'][c]))) for c in caps])
+    ids = np.array([repr(int(float(bc_def['preid'][c]))) for c in caps])
     order = np.argsort(ids)
     caps = np.array(caps)[order]
     ids = ids[order]
@@ -129,9 +131,77 @@ def write_path_segmentation(db, geo):
     return err_seg
 
 
-def write_inflow(db, geo, model):
+def fourier(x, n_sample_freq=128):
+    assert x.shape[0] % 2 == 0, 'odd number of parameters'
+    n_mode = x.shape[0] // 2
+
+    x_complex = x[:n_mode] + 1j * x[n_mode:]
+    inflow_fft = np.zeros(n_sample_freq + 1, dtype=complex)
+    inflow_fft[:n_mode] = x_complex
+
+    return np.fft.irfft(inflow_fft)
+
+
+def error(time, inflow, time_smooth, inflow_smooth):
+    # repeat last value at the start
+    time_smooth = np.insert(time_smooth, 0, 0)
+    inflow_smooth = np.insert(inflow_smooth, 0, inflow_smooth[-1])
+
+    # interpolate to coarse time
+    inflow_interp = interp1d(time_smooth, inflow_smooth)(time)
+
+    return np.sqrt(np.sum((inflow - inflow_interp) ** 2))
+
+
+def optimize_inflow(db, geo):
+    # define fourier smoothing
+    n_sample_real = 256
+    n_sample_freq = n_sample_real // 2
+    n_mode = 10
+    debug = False
+
     # read inflow conditions
     time, inflow = db.get_inflow(geo)
+
+    # insert last 3d time step as 1d initial condition (periodic solution)
+    time = np.insert(time, 0, 0)
+    inflow = np.insert(inflow, 0, inflow[-1])
+
+    # linearly interpolate at 256 time points
+    time_smooth = np.linspace(0, time[-1], n_sample_real + 1)[1:]
+    inflow_interp_lin = interp1d(time, inflow)(time_smooth)
+
+    # get starting value from fft
+    inflow_fft = np.fft.rfft(inflow_interp_lin)
+    x0 = inflow_fft[:n_mode]
+    x0_split = np.array(np.hstack((np.real(x0), np.imag(x0))))
+
+    # setup otimization problem
+    run = lambda x: error(time, inflow, time_smooth, fourier(x, n_sample_freq))
+
+    # optimize frequencies to match inflow profile
+    res = minimize(run, x0_split, tol=1.0e-8, options={'disp': debug})
+    inflow_smooth = fourier(res.x)
+
+    # add time step zero
+    time_smooth = np.insert(time_smooth, 0, 0)
+    inflow_smooth = np.insert(inflow_smooth, 0, inflow_smooth[-1])
+
+    if debug:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
+        ax.plot(time_smooth, fourier(x0_split), 'b-')
+        ax.plot(time_smooth, inflow_smooth, 'r-')
+        ax.plot(time, inflow, 'kx')
+        plt.grid()
+        plt.show()
+
+    return time_smooth, inflow_smooth
+
+
+def write_inflow(db, geo, model):
+    # get inflow
+    time, inflow = optimize_inflow(db, geo)
 
     # reverse flow for this geometry (wrong surface normals, too lazy to fix)
     if geo == '0069_0001':
@@ -143,6 +213,8 @@ def write_inflow(db, geo, model):
 
     # save inflow file
     np.savetxt(db.get_sv_flow_path(geo, model), np.vstack((time, inflow)).T)
+    # np.savetxt(db.get_sv_flow_path(geo, model), np.vstack(([0, 1], [inflow[-1], inflow[-1]])).T)
+    # np.savetxt(db.get_sv_flow_path(geo, model), np.vstack(([0, 1], [0, 0])).T)
 
     return len(inflow), time[-1]
 
@@ -156,6 +228,9 @@ def write_pre(db, geo):
 
     # read inflow conditions
     time, inflow = db.get_inflow(geo)
+
+    # outlet names
+    outlets = db.get_outlet_names(geo)
 
     with open(db.get_svpre_file(geo), 'w+') as f:
 
@@ -172,7 +247,8 @@ def write_pre(db, geo):
 
         # write surfaces (sort according to surface ID for readability)
         f.write('set_surface_id_vtp ' + os.path.join(fpath_surf, 'wall.vtp') + ' 0\n')
-        for k, v in sorted(bc_def['spid'].items(), key=lambda kv: kv[1]):
+        for k in outlets:
+            v = bc_def['preid'][k]
             if int(v) > 0:
                 f_surf = os.path.join(fpath_surf, k + '.vtp')
 
@@ -190,7 +266,8 @@ def write_pre(db, geo):
         # generate inflow
         f.write('bct_analytical_shape ' + bc_def['bc']['inflow']['type'] + '\n')
         f.write('bct_period ' + str(time[-1]) + '\n')
-        f.write('bct_point_number ' + str(len(inflow)) + '\n')
+        # f.write('bct_point_number ' + str(len(inflow)) + '\n')
+        f.write('bct_point_number 256\n')
         f.write('bct_fourier_mode_number 10\n')
         f.write('bct_create ' + f_inflow + ' ' + db.get_sv_flow_path(geo, '3d') + '\n')
         f.write('bct_write_dat bct.dat\n')
@@ -205,7 +282,8 @@ def write_pre(db, geo):
         f.write('noslip_vtp mesh-complete/mesh-surfaces/wall.vtp\n\n')
 
         # reference pressure
-        for cap, bc in bc_def['bc'].items():
+        for cap in outlets:
+            bc = bc_def['bc'][cap]
             if cap == 'inflow' or cap == 'wall':
                 continue
             if 'Po' in bc:
@@ -215,12 +293,10 @@ def write_pre(db, geo):
             f.write('pressure_vtp ' + os.path.join(fpath_surf, cap + '.vtp') + ' ' + p + '\n')
         f.write('\n')
 
-        # todo: replace by pressure/velocity fields
+        # set OSMSC results as initial condition
+        f.write('read_pressure_velocity_vtu ' + db.get_initial_conditions(geo) + '\n\n')
         # f.write('initial_pressure 0\n')
         # f.write('initial_velocity 0.0001 0.0001 0.0001\n\n')
-
-        # set OSMSC results as initial condition
-        f.write('read_pressure_velocity_vtu ' + db.get_volume(geo) + '\n\n')
 
         # request outputs
         f.write('write_geombc geombc.dat.1\n')
@@ -247,6 +323,9 @@ def write_solver(db, geo):
     # number of cycles
     n_cycle = 3
 
+    # ordered outlets
+    outlets = db.get_outlet_names(geo)
+
     with open(db.get_solver_file(geo), 'w+') as f:
         # write default parameters
         # todo: get from tcl
@@ -258,7 +337,7 @@ def write_solver(db, geo):
         f.write('Time Step Size: ' + str(dt) + '\n\n')
 
         # output
-        f.write('Number of Timesteps between Restarts: 10\n')
+        f.write('Number of Timesteps between Restarts: 1\n')
         f.write('Number of Force Surfaces: 1\n')
         f.write('Surface ID\'s for Force Calculation: 0\n')
         f.write('Force Calculation Method: Velocity Based\n')
@@ -267,12 +346,12 @@ def write_solver(db, geo):
 
         f.write('Time Varying Boundary Conditions From File: True\n\n')
 
-        f.write('Step Construction: 0 1 0 1\n\n')
+        f.write('Step Construction: 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1\n\n')
 
         # collect faces for each boundary condition type
         bc_ids = defaultdict(list)
-        for cap, bc in bc_type.items():
-            bc_ids[bc] += [int(bc_def['spid'][cap])]
+        for cap in outlets:
+            bc_ids[bc_type[cap]] += [int(bc_def['preid'][cap])]
 
         names = {'rcr': 'RCR', 'resistance': 'Resistance', 'coronary': 'Coronary'}
         for t, v in bc_ids.items():
@@ -295,24 +374,25 @@ def write_solver(db, geo):
 
         f.write('Backflow Stabilization Coefficient: 0.2\n')
 
+        # linear solver
+        f.write('svLS Type: GMRES\n')
+        f.write('Number of Krylov Vectors per GMRES Sweep: 100\n')
+        f.write('Number of Solves per Left-hand-side Formation: 1\n')
+
         # nonlinear solver
         f.write('Residual Control: True\n')
         f.write('Residual Criteria: 0.01\n')
         f.write('Minimum Required Iterations: 3\n')
 
-        # linear solver
-        f.write('svLS Type: NS\n')
-        f.write('Number of Krylov Vectors per GMRES Sweep: 100\n')
-        f.write('Number of Solves per Left-hand-side Formation: 1\n')
+        f.write('Tolerance on Momentum Equations: 1.0e-4\n')
+        f.write('Tolerance on Continuity Equations: 1.0e-4\n')
+        f.write('Tolerance on svLS NS Solver: 1.0e-4\n')
 
-        f.write('Tolerance on Momentum Equations: 0.01\n')
-        f.write('Tolerance on Continuity Equations: 0.01\n')
-        f.write('Tolerance on svLS NS Solver: 0.01\n')
-
-        f.write('Maximum Number of Iterations for svLS NS Solver: 5\n')
-        f.write('Maximum Number of Iterations for svLS Momentum Loop: 2\n')
+        f.write('Maximum Number of Iterations for svLS NS Solver: 1\n')
+        f.write('Maximum Number of Iterations for svLS Momentum Loop: 10\n')
         f.write('Maximum Number of Iterations for svLS Continuity Loop: 400\n')
 
+        # time integration
         f.write('Time Integration Rule: Second Order\n')
         f.write('Time Integration Rho Infinity: 0.5\n')
 
@@ -338,11 +418,6 @@ def copy_files(db, geo):
     fpath_res = os.path.join(db.fpath_sim, geo, 'results', geo + '_sim_results_in_cm.vtu')
     shutil.copy(fpath_res, os.path.join(db.get_solve_dir_3d(geo), 'mesh-complete'))
 
-    # copy inflow
-    # inflow_src = os.path.join(db.fpath_gen, 'surfaces', geo, 'inflow.vtp')
-    # inflow_trg = os.path.join(db.get_solve_dir_3d(geo), 'bct.vtp')
-    # shutil.copy(inflow_src, inflow_trg)
-
 
 def write_value(params, geo, bc, name):
     return str(get_in_model_units(params['sim_units'], name[0], float(bc[name])))
@@ -364,7 +439,7 @@ def write_bc(fdir, db, geo, write_face=True):
     # get outlet names
     outlets = db.get_outlet_names(geo)
 
-    # names expected by SimVascular for different boundary conditions
+    # names expected by svsolver for different boundary conditions
     bc_file_names = {'rcr': 'rcrt.dat', 'resistance': 'resistance.dat', 'coronary': 'cort.dat'}
 
     # keyword to indicate a new boundary condition
@@ -398,9 +473,8 @@ def write_bc(fdir, db, geo, write_face=True):
             f.write(write_value(params, geo, bc, 'Rp') + '\n')
             f.write(write_value(params, geo, bc, 'C') + '\n')
             f.write(write_value(params, geo, bc, 'Rd') + '\n')
-            if 'Po' in bc:
-                if bc['Po'] != 0.0:
-                    return None, 'RCR with Po unequal zero'
+            if 'Po' in bc and bc['Po'] != 0.0:
+                return None, 'RCR with Po unequal zero'
             # not sure what this does???
             f.write('0.0 0\n')
             f.write('1.0 0\n')
