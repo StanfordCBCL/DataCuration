@@ -8,9 +8,9 @@ import vtk
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from get_database import input_args, Database, Post
+from get_database import input_args, Database, Post, SimVascular
 from vtk_functions import read_geo, write_geo
-from get_bc_integrals import integrate_surfaces
+from get_bc_integrals import integrate_surfaces, integrate_bcs
 
 import matplotlib.pyplot as plt
 
@@ -105,6 +105,8 @@ def integrate_inlet(f_in, f_out):
 
 
 def main(db, geometries):
+    post = Post()
+
     for geo in geometries:
         print('Checking geometry ' + geo)
 
@@ -118,15 +120,24 @@ def main(db, geometries):
         # get model inlet from bct.dat and bct.vtp
         surf_int = integrate_inlet(f_in, f_out)
 
+        # postproc initial conditions
+        sv = SimVascular()
+        sv.run_post(db.get_solve_dir_3d(geo), ['-start', '0', '-stop', '0', '-incr', '1', '-vtkcombo', '-vtp', 'initial.vtp'])
+
+        # get initial conditions
+        fpath_surf = db.get_surfaces(geo, 'all_exterior')
+        f_initial = os.path.join(db.get_solve_dir_3d(geo), 'initial.vtp')
+        ini = integrate_bcs(fpath_surf, f_initial, ['pressure', 'velocity'])
+
         # plot comparison
-        post = Post()
         fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
         plt.plot(time, inflow * post.convert['flow'])
         plt.plot(surf_int['time'], surf_int['velocity'] * post.convert['flow'])
+        plt.plot(0, ini['velocity'][0][0] * post.convert['flow'], 'ro', fillstyle='none')
         plt.xlabel('Time [s]')
         plt.ylabel('Flow [l/h]')
         plt.grid()
-        ax.legend(['OSMSC', 'Rerun'])
+        ax.legend(['OSMSC', 'Rerun', 'Initial condition'])
         fig.savefig(f_out, bbox_inches='tight')
         plt.cla()
 
