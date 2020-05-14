@@ -137,7 +137,7 @@ def main(db, geometries):
 
         fpath_1d = db.get_centerline_path(geo)
         fpath_3d = db.get_volume(geo)
-        fpath_out = db.get_3d_flow_path_oned_vtp(geo)
+        fpath_out = db.get_3d_flow(geo)
 
         # if os.path.exists(db.get_3d_flow_path_oned_vtp(geo)):
         #     print('  Already exists. Skipping...')
