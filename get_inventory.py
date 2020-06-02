@@ -1,16 +1,23 @@
 #!/usr/bin/env python
 
+import pdb
 import csv
 from collections import defaultdict, OrderedDict
 
-from get_database import input_args
+from get_database import Database
 
 
-def main(db, geometries):
+def main():
+    db = Database()
+    geometries = db.get_geometries()
+    geometries_paper = db.get_geometries_select('paper')
+
     properties = defaultdict(OrderedDict)
     params_read = ['age', 'gender', 'deliverable_category', 'vascular_state', 'treatment', 'other_disease',
-                   'model_source', 'simulation_source']
+                   'sim_physio_state', 'image_data_modality', 'paper_reference',
+                   'model_source', 'simulation_source', 'sim_steps_per_cycle']
 
+    # extract simulation parameters
     for geo in geometries:
         print('Running geometry ' + geo)
         params = db.get_params(geo)
@@ -22,17 +29,33 @@ def main(db, geometries):
                 val = params[pm]
             properties[geo][pm] = val
 
-    with open('osmsc.csv', 'w', newline='') as csvfile:
+    # check if simulation is to be published
+    for geo in geometries:
+        if geo in geometries_paper:
+            publish = 'yes'
+        else:
+            publish = 'no'
+        properties[geo]['publish'] = publish
+
+    # check if boundary conditions exist
+    for geo in geometries:
+        _, err = db.get_bc_type(geo)
+        if not err:
+            bc = 'yes'
+        else:
+            bc = 'no'
+        properties[geo]['has_bcs'] = bc
+
+    with open('osmsc2.csv', 'w', newline='') as csvfile:
         reader = csv.writer(csvfile, delimiter=',')
 
         # write header
-        reader.writerow(['model_id'] + params_read)
+        reader.writerow(['model_id'] + list(properties[geometries[0]].keys()))
 
+        # write rows
         for geo in geometries:
             reader.writerow([geo] + [v for v in properties[geo].values()])
 
 
 if __name__ == '__main__':
-    descr = 'Generate a new surface mesh'
-    d, g, _ = input_args(descr)
-    main(d, g)
+    main()
