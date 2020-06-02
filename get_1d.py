@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import argparse
+import math
 
 import numpy as np
 from scipy.interpolate import CubicSpline, interp1d
@@ -27,7 +28,7 @@ def generate_1d(db, geo):
     # use all options, set to None if using defaults (in cgs units)
 
     # number of cycles to run
-    n_cycle = 10
+    n_cycle = 30
 
     # sub-segment size
     seg_min_num = 1
@@ -40,10 +41,12 @@ def generate_1d(db, geo):
     # mesh adaptive?
     seg_size_adaptive = True
 
-    # set simulation paths and create folders
+    # set simulation paths
     fpath_1d = db.get_solve_dir_1d(geo)
     fpath_geo = os.path.join(fpath_1d, 'geometry')
     fpath_surf = os.path.join(fpath_geo, 'surfaces')
+
+    # create folders
     os.makedirs(fpath_geo, exist_ok=True)
     os.makedirs(fpath_surf, exist_ok=True)
 
@@ -77,6 +80,8 @@ def generate_1d(db, geo):
 
     # get simulation constants
     constants = db.get_constants(geo)
+    if constants is None:
+        return 'boundary conditions do not exist'
 
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
@@ -92,15 +97,16 @@ def generate_1d(db, geo):
     # read inflow conditions
     flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
 
-    # write inflow
-    write_inflow(db, geo, '1d')
-
     # set simulation time as end of 3d simulation
     save_data_freq = 1
     dt = 1e-3
 
     # run all cycles
     num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
+
+    # write inflow
+    n_step = math.ceil((flow['time'][-1]/dt + 1) / 2.) * 2
+    write_inflow(db, geo, '1d', n_step)
 
     try:
     # if True:
@@ -156,9 +162,9 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        # if os.path.exists(os.path.join(db.get_solve_dir_1d(geo), geo + '.vtp')):
-        #     print('  skipping')
-        #     continue
+        if os.path.exists(db.get_1d_flow_path(geo)):
+            print('  skipping')
+            continue
 
         # generate oneDSolver input file and check if successful
         msg = generate_1d(db, geo)
@@ -177,7 +183,13 @@ def main(db, geometries):
 
             # save results
             if results_1d['flow']:
+                # save results in dict
                 np.save(db.get_1d_flow_path(geo), results_1d)
+
+                # remove 1d output files
+                for f in glob.glob(os.path.join(res_dir, geo + 'branch*seg*_*.dat')):
+                    os.remove(f)
+
                 msg = 'success'
             else:
                 msg = 'unconverged'
