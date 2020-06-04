@@ -10,14 +10,16 @@ import sys
 import scipy
 import pdb
 import vtk
+import scipy.interpolate
 
 import numpy as np
-from _collections import defaultdict
+from collections import defaultdict
 
 from common import get_dict
 from get_database import input_args
 from vtk_functions import read_geo, collect_arrays, get_all_arrays
 from get_bc_integrals import get_res_names
+from vtk_to_xdmf import write_xdmf
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
@@ -47,7 +49,7 @@ def read_results_1d(res_dir, params_file=None):
         result_list_1d = glob.glob(os.path.join(res_dir, '*branch*seg*_' + field + '.dat'))
 
         # loop segments
-        results_1d[field] = {}
+        results_1d[field] = defaultdict(dict)
         for f_res in result_list_1d:
             with open(f_res) as f:
                 reader = csv.reader(f, delimiter=' ')
@@ -60,14 +62,82 @@ def read_results_1d(res_dir, params_file=None):
             # store results and GroupId
             seg = int(re.findall(r'\d+', f_res)[-1])
             branch = int(re.findall(r'\d+', f_res)[-2])
-            if branch not in results_1d[field]:
-                results_1d[field][branch] = {}
             results_1d[field][branch][seg] = np.array(results_1d_f)
 
     # read simulation parameters and add to result dict
     results_1d['params'] = get_dict(params_file)
 
     return results_1d
+
+
+def write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_cent, f_out):
+    # read results
+    res_1d = get_dict(f_res_1d)
+    res_3d = load_results_3d(f_res_3d)
+
+    # read geometry
+    geo_cent = read_geo(f_cent).GetOutput()
+    geo_1d = read_geo(f_geo_1d).GetOutput()
+
+    # extract point arrays from geometry
+    arrays_cent, _ = get_all_arrays(geo_cent)
+    arrays_1d, _ = get_all_arrays(geo_1d)
+
+    # get time information
+    time = {}
+    get_time('3d', res_3d, time)
+    get_time('1d', res_1d, time)
+
+    # write results to centerline
+    arrays = map_1d_to_centerline(arrays_cent, arrays_1d)
+
+    write_xdmf(geo_cent, arrays, f_out)
+
+
+def map_1d_to_centerline(arrays_cent, arrays_1d):
+    # assemble output dict
+    rec_dd = lambda: defaultdict(rec_dd)
+    arrays = rec_dd()
+
+    # add centerline arrays
+    for name, data in arrays_cent.items():
+        arrays['always']['point'][name] = data
+
+    # add 1d results
+    i_export = np.where(time['1d_last_cycle_i'])[0]
+
+    # fields to export
+    fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
+
+    # number of time steps
+    n_t = res_1d[fields_res_1d[0]][0][0].shape[1]
+
+    # loop all result fields
+    for f in fields_res_1d:
+        array_f = np.zeros((geo_cent.GetNumberOfPoints(), n_t))
+
+        # loop all branches
+        for br in res_1d[f].keys():
+            # get centerline path
+            path_cent = arrays_cent['Path'][arrays_cent['BranchId'] == br]
+
+            # get 1d path
+            path_1d_geo = arrays_1d['Path'][arrays_1d['BranchId'] == br]
+
+            path_1d_res, f_res = res_1d_to_path(path_1d_geo, res_1d[f][br])
+
+            # map 1d results to centerline using paths
+            interp = scipy.interpolate.interp1d(path_1d_res, f_res.T, fill_value='extrapolate')
+            f_cent = interp(path_cent).T
+
+            # store results of this path
+            array_f[arrays_cent['BranchId'] == br] = f_cent
+
+        # assemble time steps
+        for i, t in enumerate(i_export):
+            arrays[str(time['1d'][i])]['point'][f] = array_f[:, t]
+
+    return arrays
 
 
 def load_results_3d(f_res_3d):
@@ -131,7 +201,7 @@ def get_time(model, res, time):
         time[model + '_all'] = np.arange(0, res['pressure'][0][0].shape[1] + 1)[1:] * dt
 
     # time steps for last cycle
-    if model == '1d' or model == '3d_rerun':
+    if '3d' in time and (model == '1d' or model == '3d_rerun'):
         n_cycle_1d = max(1, int(time[model + '_all'][-1] // time['3d'][-1]))
         t_1d_first = time['3d'][-1] * (n_cycle_1d - 1)
         time[model + '_last_cycle_i'] = time[model + '_all'] >= t_1d_first
@@ -152,9 +222,32 @@ def check_consistency(r_oned, res_1d, res_3d):
     return None
 
 
+def get_branches(arrays):
+    """
+    Get list of branch IDs from point arrays
+    """
+    branches = np.unique(arrays['BranchId']).astype(int).tolist()
+    if -1 in branches:
+        branches.remove(-1)
+    return branches
+
+
+def get_caps_db(db, geo):
+    """
+    Get caps for OSMSC models
+    """
+    return get_caps(db.get_centerline_outlet_path(geo), db.get_centerline_path(geo))
+
+
 def get_caps(f_outlet, f_centerline):
     """
-    Create dictionary: cap name -> BranchId
+    Map outlet names to centerline branch id
+    Args:
+        f_outlet: ordered list of outlet names (created during centerline extraction)
+        f_centerline: centerline geometry (.vtp)
+
+    Returns:
+        dictionary {cap name: BranchId}
     """
     caps = {'inflow': 0}
 
@@ -168,29 +261,53 @@ def get_caps(f_outlet, f_centerline):
     cent = read_geo(f_centerline).GetOutput()
     branch_id = v2n(cent.GetPointData().GetArray('BranchId'))
 
-    # find outlets and store name and branch id
+    # find outlets and store outlet name and BranchId
     ids = vtk.vtkIdList()
     i_outlet = 0
+
+    # loop all centerline points
     for i in range(1, cent.GetNumberOfPoints()):
         cent.GetPointCells(i, ids)
+
+        # check if cap
         if ids.GetNumberOfIds() == 1:
+            # this works since the points are numbered according to the order of outlets
             caps[outlet_names[i_outlet]] = branch_id[i]
             i_outlet += 1
 
     return caps
 
 
-def collect_results(model, res, time, f_res, f_outlet, centerline=None, res3d=None):
+def res_1d_to_path(path, res):
+    path_1d = []
+    int_1d = []
+    for seg, res_1d_seg in sorted(res.items()):
+        # 1d results are duplicate at FE-nodes at corners of segments
+        if seg == 0:
+            # start with first FE-node
+            i_start = 0
+        else:
+            # skip first FE-node (equal to last FE-node of previous segment)
+            i_start = 1
+
+        # generate path for segment FEs, assuming equidistant spacing
+        p0 = path[seg]
+        p1 = path[seg + 1]
+        path_1d += np.linspace(p0, p1, res_1d_seg.shape[0])[i_start:].tolist()
+        int_1d += res_1d_seg[i_start:].tolist()
+
+    return np.array(path_1d), np.array(int_1d)
+
+
+def collect_results(model, res, time, f_res, centerline=None):
     # read results
     # todo: store 1d results in vtp as well
     if '1d' in model:
         res_in = get_dict(f_res)
         f_geo = centerline
-        f_cap = res3d
     elif '3d' in model:
         res_in = load_results_3d(f_res)
         f_geo = f_res
-        f_cap = f_res
     else:
         raise ValueError('Model ' + model + ' not recognized')
 
@@ -200,65 +317,48 @@ def collect_results(model, res, time, f_res, f_outlet, centerline=None, res3d=No
     # extract point and cell arrays from geometry
     arrays, _ = get_all_arrays(geo.GetOutput())
 
-    # get cap->branch map
-    caps = get_caps(f_outlet, f_cap)
+    # get branches
+    branches = get_branches(arrays)
 
     # simulation time steps
     get_time(model, res_in, time)
 
     # loop outlets
-    for c, br in caps.items():
+    for br in branches:
         # 1d-path along branch (real length units)
         branch_path = arrays['Path'][arrays['BranchId'] == br]
 
         # loop result fields
         for f in ['flow', 'pressure', 'area']:
             if '1d' in model:
-                # loop 1d segments
-                path_1d = []
-                int_1d = []
-                for seg, res_1d_seg in sorted(res_in[f][br].items()):
-                    # 1d results are duplicate at FE-nodes at corners of segments
-                    if seg == 0:
-                        # start with first FE-node
-                        i_start = 0
-                    else:
-                        # skip first FE-node (equal to last FE-node of previous segment)
-                        i_start = 1
-
-                    # generate path for segment FEs, assuming equidistant spacing
-                    p0 = branch_path[seg]
-                    p1 = branch_path[seg + 1]
-                    path_1d += np.linspace(p0, p1, res_1d_seg.shape[0])[i_start:].tolist()
-                    int_1d += res_1d_seg[i_start:].tolist()
-
-                res[c]['1d_path'] = np.array(path_1d)
-                res[c][f]['1d_int'] = np.array(int_1d)
+                res[br]['1d_path'], res[br][f]['1d_int'] = res_1d_to_path(branch_path, res_in[f][br])
 
             elif '3d' in model:
-                res[c][model + '_path'] = branch_path
-                res[c][f][model + '_int'] = res_in[f][br].T
+                res[br][model + '_path'] = branch_path
+                res[br][f][model + '_int'] = res_in[f][br].T
 
             # copy last time step at t=0
             if model == '3d':
-                res[c][f][model + '_int'] = np.tile(res[c][f][model + '_int'], (1, 2))[:, res[c][f][model + '_int'].shape[1] - 1:]
+                res[br][f][model + '_int'] = np.tile(res[br][f][model + '_int'], (1, 2))[:, res[br][f][model + '_int'].shape[1] - 1:]
 
             # cap results
-            if c == 'inflow':
+            if br == 0:
+                # inlet
                 i_cap = 0
             else:
+                # outlet
                 i_cap = -1
-            res[c][f][model + '_cap'] = res[c][f][model + '_int'][i_cap, :]
+            res[br][f][model + '_cap'] = res[br][f][model + '_int'][i_cap, :]
 
     # get last cycle
-    for c in res.keys():
-        for f in res[c].keys():
+    for br in res.keys():
+        for f in res[br].keys():
             if 'path' not in f:
-                res[c][f][model + '_all'] = res[c][f][model + '_cap']
+                res[br][f][model + '_all'] = res[br][f][model + '_cap']
 
                 if model + '_last_cycle_i' in time:
-                    res[c][f][model + '_int'] = res[c][f][model + '_int'][:, time[model + '_last_cycle_i']]
-                    res[c][f][model + '_cap'] = res[c][f][model + '_cap'][time[model + '_last_cycle_i']]
+                    res[br][f][model + '_int'] = res[br][f][model + '_int'][:, time[model + '_last_cycle_i']]
+                    res[br][f][model + '_cap'] = res[br][f][model + '_cap'][time[model + '_last_cycle_i']]
 
 
 def collect_results_db_1d_3d(db, geo):
@@ -269,12 +369,14 @@ def collect_results_db_1d_3d(db, geo):
     # get paths
     f_res_1d = db.get_1d_flow_path(geo)
     f_res_3d = db.get_3d_flow(geo)
-    f_outlet = db.get_centerline_outlet_path(geo)
     f_oned = db.get_1d_geo(geo)
 
+    if not os.path.exists(f_res_1d) or not os.path.exists(f_res_3d):
+        return None, None
+
     # collect results
-    collect_results('3d', res, time, f_res_3d, f_outlet)
-    collect_results('1d', res, time, f_res_1d, f_outlet, f_oned, f_res_3d)
+    collect_results('3d', res, time, f_res_3d)
+    collect_results('1d', res, time, f_res_1d, f_oned)
 
     return res, time
 
@@ -287,18 +389,27 @@ def collect_results_db_3d_3d(db, geo):
     # get paths
     f_res_3d_osmsc = db.get_3d_flow(geo)
     f_res_3d_rerun = db.get_3d_flow_rerun(geo)
-    f_outlet = db.get_centerline_outlet_path(geo)
 
     # collect results
-    collect_results('3d', res, time, f_res_3d_osmsc, f_outlet)
-    collect_results('3d_rerun', res, time, f_res_3d_rerun, f_outlet)
+    collect_results('3d', res, time, f_res_3d_osmsc)
+    collect_results('3d_rerun', res, time, f_res_3d_rerun)
 
     return res, time
 
 
+def export_1d_xmdf(db, geo):
+    f_geo_1d = db.get_1d_geo(geo)
+    f_res_1d = db.get_1d_flow_path(geo)
+    f_res_3d = db.get_3d_flow(geo)
+    f_geo = db.get_centerline_path(geo)
+    f_out = db.get_1d_flow_path_xdmf(geo)
+
+    write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_geo, f_out)
+
+
 def main(db, geometries):
     for geo in geometries:
-        res, time = collect_results_db(db, geo)
+        export_1d_xmdf(db, geo)
 
 
 if __name__ == '__main__':

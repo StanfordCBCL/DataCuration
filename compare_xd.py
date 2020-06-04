@@ -3,16 +3,17 @@
 import numpy as np
 import sys
 import argparse
-import scipy.interpolate
 import pdb
 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationBbox
 from collections import OrderedDict, defaultdict
+from scipy.interpolate import interp1d
 
+from common import rec_dict
 from get_database import Database, Post, input_args
-from simulation_io import collect_results_db_1d_3d, collect_results_db_3d_3d
+from simulation_io import get_caps_db, collect_results_db_1d_3d, collect_results_db_3d_3d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
@@ -31,7 +32,7 @@ def plot_1d_3d_all(db, opt, geo, res, time):
     post = Post()
 
     # get 1d/3d map
-    caps = db.get_surface_names(geo, 'caps')
+    caps = get_caps_db(db, geo)
 
     fig, ax = plt.subplots(len(post.fields), len(post.models), figsize=(20, 10), dpi=opt['dpi'], sharex='col', sharey='row')
 
@@ -46,7 +47,7 @@ def plot_1d_3d_all(db, opt, geo, res, time):
             if opt['legend_col'] or j == 0:
                 ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
 
-            for c in caps:
+            for c in caps.values():
                 ax[i, j].plot(time[m + '_all'], res[c][f][m + '_all'] * post.convert[f])
 
     add_image(db, geo, fig)
@@ -90,24 +91,29 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     post = Post()
 
     # get 1d/3d map
-    caps = db.get_surface_names(geo, 'caps')
-
+    caps = get_caps_db(db, geo)
+    
+    # get cap names
+    names = db.get_cap_names(geo)
+    
     if len(caps) > 50:
         dpi = opt['dpi'] / 2
+        sharey = False
     else:
         dpi = opt['dpi']
+        sharey = opt['sharey']
 
     fields = post.fields
     fields.remove('area')
 
-    fig, ax = plt.subplots(len(fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=opt['sharey'])
+    fig, ax = plt.subplots(len(fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=sharey)
 
     for i, f in enumerate(fields):
-        for j, c in enumerate(caps):
+        for j, (c, br) in enumerate(caps.items()):
             ax[i, j].grid(True)
 
             if opt['legend_row'] or i == 0:
-                ax[i, j].set_title(c)
+                ax[i, j].set_title(names[c])
             if opt['legend_row'] or i == len(fields) - 1:
                 ax[i, j].set_xlabel('Time [s]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
@@ -117,7 +123,7 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
 
             lg = []
             for m in post.models:
-                ax[i, j].plot(time[m], res[c][f][m + '_cap'] * post.convert[f], post.styles[m])
+                ax[i, j].plot(time[m], res[br][f][m + '_cap'] * post.convert[f], post.styles[m])
                 lg.append(m.upper())
 
             ax[i, j].legend(lg)
@@ -133,18 +139,23 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
     post = Post()
 
     # get 1d/3d map
-    caps = db.get_surface_names(geo, 'caps')
+    caps = get_caps_db(db, geo)
+
+    # get cap names
+    names = db.get_cap_names(geo)
 
     if len(caps) > 50:
         dpi = opt['dpi'] / 2
+        sharey = False
     else:
         dpi = opt['dpi']
+        sharey = opt['sharey']
 
-    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=opt['sharey'])
+    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=sharey)
 
     # pick reference time step with highest inflow
     m_ref = '3d'
-    t_max = {m_ref: np.argmax(res['inflow']['flow'][m_ref + '_cap'])}
+    t_max = {m_ref: np.argmax(res[0]['flow'][m_ref + '_cap'])}
 
     # pick closest time step for other models
     for m in post.models:
@@ -152,11 +163,11 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
             t_max[m] = np.argmin(np.abs(time[m_ref][t_max[m_ref]] - time[m]))
 
     for i, f in enumerate(post.fields):
-        for j, c in enumerate(caps):
+        for j, (c, br) in enumerate(caps.items()):
             ax[i, j].grid(True)
 
             if opt['legend_row'] or i == 0:
-                ax[i, j].set_title(c)
+                ax[i, j].set_title(names[c])
             if opt['legend_row'] or i == len(post.fields) - 1:
                 ax[i, j].set_xlabel('Vessel path [cm]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
@@ -166,7 +177,7 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
             lg = []
             for m in post.models:
-                ax[i, j].plot(res[c][m + '_path'], res[c][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
+                ax[i, j].plot(res[br][m + '_path'], res[br][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
                 lg.append(m)
 
             ax[i, j].legend(lg)
@@ -254,67 +265,59 @@ def calc_error(db, opt, geo, res, time):
     post = Post()
 
     # get 1d/3d map
-    caps = db.get_surface_names(geo, 'caps')
+    caps = get_caps_db(db, geo)
 
-    # remove inflow (prescribed flow)
-    caps.remove('inflow')
+    # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
+    interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
 
-    # all differences over time
-    delta = defaultdict(lambda: defaultdict(dict))
-    norm = defaultdict(lambda: defaultdict(dict))
+    # error definitions
+    domain = {'cap': caps.values(), 'int': res.keys(), 'spatial': res.keys()}
+    metric = ['avg', 'max', 'sys', 'dia']
+
+    err = rec_dict()
+
+    rel_diff = lambda a, b: np.abs((a - b) / b)
+
+    # get spatial error
     for f in post.fields:
-        for c in caps:
-            # interpolate in space: 1d to 3d (allow extrapolation due to round-off errors at bounds)
-            interp = scipy.interpolate.interp1d(res[c]['1d_path'], res[c][f]['1d_int'].T, fill_value='extrapolate')
-            res_1d = interp(res[c]['3d_path'])
+        for br in res.keys():
+            # retrieve 3d results
+            res_3d = res[br][f]['3d_int']
 
-            # interpolate in time: 3d to 1d (allow extrapolation due to round-off errors at bounds)
-            interp = scipy.interpolate.interp1d(time['3d'], res[c][f]['3d_int'], fill_value='extrapolate')
-            res_3d = interp(time['1d']).T
+            # interpolate in space and time
+            res_1d = interp(res[br]['1d_path'], res[br][f]['1d_int'], res[br]['3d_path'])
+            res_1d = interp(time['1d'], res_1d, time['3d'])
 
-            # difference in interior
-            delta[f][c]['int'] = np.mean(np.abs(res_3d - res_1d), axis=1) * post.convert[f]
-            norm[f][c]['int'] = np.mean(np.max(res_3d, axis=0) - np.min(res_3d, axis=0)) * post.convert[f]
+            # calculate spatial error (eliminate time dimension)
+            if f == 'pressure' or f == 'area':
+                err[f]['spatial']['avg'][br] = np.mean(rel_diff(res_1d, res_3d), axis=1)
+                err[f]['spatial']['max'][br] = np.max(rel_diff(res_1d, res_3d), axis=1)
+            elif f == 'flow':
+                err[f]['spatial']['avg'][br] = np.mean(np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1)), axis=0)
+                err[f]['spatial']['max'][br] = np.max(np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1)), axis=0)
 
-            # interpolate in time: 3d to 1d (allow extrapolation due to round-off errors at bounds)
-            interp = scipy.interpolate.interp1d(time['3d'], res[c][f]['3d_cap'], fill_value='extrapolate')
-            res_3d = interp(time['1d']).T
+            err[f]['spatial']['sys'][br] = np.abs(rel_diff(np.max(res_1d, axis=1), np.max(res_3d, axis=1)))
+            err[f]['spatial']['dia'][br] = np.abs(rel_diff(np.min(res_1d, axis=1), np.min(res_3d, axis=1)))
 
-            # difference at caps
-            delta[f][c]['caps'] = np.mean(np.abs(res_3d - res[c][f]['1d_cap']), axis=0) * post.convert[f]
-            norm[f][c]['caps'] = np.mean(np.max(res_3d, axis=0) - np.min(res_3d, axis=0)) * post.convert[f]
-
-    # get delta over time
-    err = {}
     for f in post.fields:
-        err[f] = {}
-        for c in caps:
-            err[f][c] = {}
-            for name in delta[f][c].keys():
-                err[f][c][name] = {}
-                err[f][c][name]['mean'] = {}
-                err[f][c][name]['mean']['abs'] = np.mean(delta[f][c][name])
-                err[f][c][name]['max'] = {}
-                err[f][c][name]['max']['abs'] = np.max(delta[f][c][name])
+        for m in err[f]['spatial'].keys():
+            # get interior error
+            for br in res.keys():
+                err[f]['int'][m][br] = np.mean(err[f]['spatial'][m][br])
 
-                for metric in ['mean', 'max']:
-                    if f == 'area':
-                        err[f][c][name][metric]['rel'] = err[f][c][name][metric]['abs'] / np.mean(err[f][c][name][metric]['abs'])
-                    else:
-                        err[f][c][name][metric]['rel'] = err[f][c][name][metric]['abs'] / norm[f][c][name]
+            # get cap error
+            for br in caps.values():
+                if br == 0:
+                    # inlet
+                    i_cap = 0
+                else:
+                    # outlet
+                    i_cap = -1
+                err[f]['cap'][m][br] = err[f]['spatial'][m][br][i_cap]
 
-    # mean difference over caps
-    for f in post.fields:
-        err[f]['all'] = {}
-        for name in delta[f][c].keys():
-            err[f]['all'][name] = {}
-            for m0 in err[f][c][name].keys():
-                err[f]['all'][name][m0] = {}
-                for m1 in err[f][c][name][m0].keys():
-                    if m0 == 'mean':
-                        err[f]['all'][name][m0][m1] = np.mean([err[f][c][name][m0][m1] for c in caps])
-                    elif m0 == 'max':
-                        err[f]['all'][name][m0][m1] = np.max([err[f][c][name][m0][m1] for c in caps])
+            # get error over all branches
+            err[f]['int'][m]['all'] = np.mean([err[f]['int'][m][br] for br in res.keys()])
+            err[f]['cap'][m]['all'] = np.mean([err[f]['cap'][m][br] for br in caps.values()])
 
     db.add_1d_3d_comparison(geo, err)
 
@@ -329,7 +332,7 @@ def main(db, geometries):
         # read results
         if '3d' in post.models and '1d' in post.models:
             res, time = collect_results_db_1d_3d(db, geo)
-        if '3d' in post.models and '3d_rerun' in post.models:
+        elif '3d' in post.models and '3d_rerun' in post.models:
             res, time = collect_results_db_3d_3d(db, geo)
         else:
             raise ValueError('Unknown combination of models')
@@ -341,7 +344,7 @@ def main(db, geometries):
         opt = {'legend_col': False,
                'legend_row': False,
                'sharex': True,
-               'sharey': 'row',
+               'sharey': False,#'row',
                'dpi': 200,
                'w': 1 * (len(db.get_surface_names(geo)) * 2 + 2),
                'h': 2 * (len(Post().fields) * 1 + 1)}

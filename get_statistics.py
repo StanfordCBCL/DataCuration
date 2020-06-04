@@ -47,61 +47,50 @@ def plot_err_bar(res, folder):
     # get post-processing constants
     post = Post()
 
-    metric0 = ['mean', 'max']
-    metric1 = ['abs', 'rel']
-    domain = ['caps', 'int']
+    domain = ['cap', 'int']
+    metric0 = ['avg', 'max']#, 'sys', 'dia'
 
     fig1, ax1 = plt.subplots(dpi=300, figsize=(12, 6))
     for f in post.fields:
         for d in domain:
             for m0 in metric0:
-                for m1 in metric1:
-                    labels = []
-                    values = []
-                    for k in res:
-                        labels += [k]
-                        values += [res[k][f]['all'][d][m0][m1]]
+                labels = []
+                values = []
+                for k in res:
+                    labels += [k]
+                    values += [res[k][f][d][m0]['all']]
 
-                    labels = np.array(labels)
-                    values = np.array(values)
-                    xtick = np.arange(len(values))
+                labels = np.array(labels)
+                values = np.array(values)
+                xtick = np.arange(len(values))
 
-                    order = np.argsort(values)
-                    plot_bar(post.units, fig1, ax1, xtick, values, labels, order, m0, m1, f, d, folder, 'sorted')
+                order = np.argsort(values)
+                plot_bar(fig1, ax1, xtick, values, labels, order, m0, f, d, folder, 'sorted')
 
-                    order = np.argsort(labels)
-                    plot_bar(post.units, fig1, ax1, xtick, values, labels, order, m0, m1, f, d, folder, 'aplhabetical')
-    plt.close()
+                order = np.argsort(labels)
+                plot_bar(fig1, ax1, xtick, values, labels, order, m0, f, d, folder, 'aplhabetical')
+    plt.close(fig1)
 
 
-def plot_bar(units, fig1, ax1, xtick, values, labels, order, m0, m1, f, d, folder, name):
-    if m1 == 'abs':
-        u = units[f]
-        v = values
-    elif m1 == 'rel':
-        u = '1'
-        v = values
-
+def plot_bar(fig1, ax1, xtick, values, labels, order, m0, f, d, folder, name):
     plt.cla()
-    ax1.bar(xtick, v[order])
-    ax1.yaxis.grid(True)
-    plt.xticks(xtick, labels[order], rotation='vertical')
-    plt.ylabel(m0 + ' ' + m1 + ' ' + f + ' error at ' + d + ' [' + u + ']')
     plt.yscale('log')
-    fname = os.path.join(folder, 'error_' + name + '_' + f + '_' + d + '_' + m0 + '_' + m1 + '.png')
+    ax1.bar(xtick, values[order])
+    ax1.yaxis.grid(True)
+    ax1.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1, decimals=1))
+    ax1.set_ylim(0.001, 1)
+    plt.xticks(xtick, labels[order], rotation='vertical')
+    plt.ylabel(m0 + ' ' + f + ' error at ' + d + ' [1]')
+    fname = os.path.join(folder, 'error_' + name + '_' + f + '_' + d + '_' + m0 + '.png')
     fig1.savefig(fname, bbox_inches='tight')
 
 
 def plot_err_scatter(res, folder):
-    # get post-processing constants
-    post = Post()
-
     # plot different correlations of errors
     combinations = [['flow', 'pressure'], ['area', 'flow'], ['area', 'pressure']]
 
-    metric0 = ['mean', 'max']
-    metric1 = ['abs', 'rel']
-    domain = ['caps', 'int']
+    domain = ['cap', 'int']
+    metric0 = ['avg', 'max']#, 'sys', 'dia'
 
     fig1, ax1 = plt.subplots(dpi=300, figsize=(12, 6))
     for c in combinations:
@@ -110,85 +99,86 @@ def plot_err_scatter(res, folder):
 
         for d in domain:
             for m0 in metric0:
-                for m1 in metric1:
-                    if m1 == 'abs':
-                        ux = post.units[fx]
-                        uy = post.units[fy]
-                        scale = 1
-                    elif m1 == 'rel':
-                        ux = '1'
-                        uy = '1'
-                        scale = 100
+                ux = '1'
+                uy = '1'
+                scale = 100
 
-                    plt.cla()
-                    for geo, err in res.items():
-                        x = err[fx]['all'][d][m0][m1] * scale
-                        y = err[fy]['all'][d][m0][m1] * scale
+                plt.cla()
+                for geo, err in res.items():
+                    x = err[fx][d][m0]['all'] * scale
+                    y = err[fy][d][m0]['all'] * scale
 
-                        ax1.plot(x, y, 'o')
-                        ax1.annotate(geo, (x, y))
+                    ax1.plot(x, y, 'o')
+                    ax1.annotate(geo, (x, y))
 
-                    plt.xlabel(m0 + ' ' + m1 + ' ' + fx + ' error at ' + d + ' [' + ux + ']')
-                    plt.ylabel(m0 + ' ' + m1 + ' ' + fy + ' error at ' + d + ' [' + uy + ']')
-                    plt.xscale('log')
-                    plt.yscale('log')
-                    plt.grid()
-                if m1 == 'rel':
-                    ax1.xaxis.set_major_formatter(mtick.PercentFormatter())
-                    ax1.yaxis.set_major_formatter(mtick.PercentFormatter())
+                plt.xlabel(m0 + ' ' + fx + ' error at ' + d + ' [' + ux + ']')
+                plt.ylabel(m0 + ' ' + fy + ' error at ' + d + ' [' + uy + ']')
+                plt.xscale('log')
+                plt.yscale('log')
+                plt.grid()
+                ax1.xaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
+                ax1.yaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
+                # if m0 == 'avg':
+                #     ax1.set_xlim(1, 200)
+                #     ax1.set_ylim(1, 200)
+                # elif m0 == 'max':
+                #     ax1.set_xlim(1, 1000)
+                #     ax1.set_ylim(1, 1000)
+                ax1.set_xlim(0.1, 100)
+                ax1.set_ylim(0.1, 100)
 
-                    fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '_' + m1 + '.png'
-                    fpath = os.path.join(folder, fname)
-                    fig1.savefig(fpath, bbox_inches='tight')
+                fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '.png'
+                fpath = os.path.join(folder, fname)
+                fig1.savefig(fpath, bbox_inches='tight')
+    plt.close(fig1)
 
 
 def plot_img_scatter(db, res, folder):
-    # get post-processing constants
-    post = Post()
-
     fsize = 50
     fig1, ax1 = plt.subplots(dpi=100, figsize=(60, 30))
     plt.rcParams.update({'font.size': fsize})
 
-    metric0 = ['mean', 'max']
-    metric1 = ['abs', 'rel']
-    domain = ['caps', 'int']
+    domain = ['cap', 'int']
+    metric0 = ['avg', 'max']#, 'sys', 'dia'
 
     for d in domain:
         for m0 in metric0:
-            for m1 in metric1:
-                fx = 'flow'
-                fy = 'pressure'
+            fx = 'flow'
+            fy = 'pressure'
 
-                if m1 == 'abs':
-                    ux = post.units[fx]
-                    uy = post.units[fy]
-                    scale = 1
-                elif m1 == 'rel':
-                    ux = '1'
-                    uy = '1'
-                    scale = 100
+            ux = '1'
+            uy = '1'
+            scale = 100
 
-                plt.cla()
-                for geo, err in res.items():
-                    x = err[fx]['all'][d][m0][m1] * scale
-                    y = err[fy]['all'][d][m0][m1] * scale
-                    ab = AnnotationBbox(OffsetImage(plt.imread(db.get_png(geo))), (x, y), frameon=False)
-                    ax1.scatter(x, y, c='k')
-                    ax1.add_artist(ab)
+            plt.cla()
+            for geo, err in res.items():
+                x = err[fx][d][m0]['all'] * scale
+                y = err[fy][d][m0]['all'] * scale
+                ab = AnnotationBbox(OffsetImage(plt.imread(db.get_png(geo))), (x, y), frameon=False)
+                ax1.scatter(x, y, c='k')
+                ax1.add_artist(ab)
 
-                plt.xlabel(m0 + ' ' + m1 + ' ' + fx + ' error at ' + d + ' [' + ux + ']', fontsize=fsize)
-                plt.ylabel(m0 + ' ' + m1 + ' ' + fy + ' error at ' + d + ' [' + uy + ']', fontsize=fsize)
-                plt.xscale('log')
-                plt.yscale('log')
-                plt.grid()
-                if m1 == 'rel':
-                    ax1.xaxis.set_major_formatter(mtick.PercentFormatter())
-                    ax1.yaxis.set_major_formatter(mtick.PercentFormatter())
+            plt.xlabel(m0 + ' ' + fx + ' error at ' + d + ' [' + ux + ']', fontsize=fsize)
+            plt.ylabel(m0 + ' ' + fy + ' error at ' + d + ' [' + uy + ']', fontsize=fsize)
+            plt.xscale('log')
+            plt.yscale('log')
+            plt.grid()
+            ax1.xaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
+            ax1.yaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
+            # if m0 == 'avg':
+            #     ax1.set_xlim(1, 200)
+            #     ax1.set_ylim(1, 200)
+            # elif m0 == 'max':
+            #     ax1.set_xlim(1, 1000)
+            #     ax1.set_ylim(1, 1000)
+            ax1.set_xlim(0.1, 100)
+            ax1.set_ylim(0.1, 100)
 
-                fname = 'error_correlation_img_' + fx + '_' + fy + '_' + d + '_' + m0 + '_' + m1 + '.png'
-                fpath = os.path.join(folder, fname)
-                fig1.savefig(fpath, bbox_inches='tight')
+            fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '_img.png'
+            fpath = os.path.join(folder, fname)
+            fig1.savefig(fpath, bbox_inches='tight')
+    plt.close(fig1)
+
 
 def print_statistics(db, geometries):
     res_all = get_dict(db.get_log_file_1d())
@@ -210,19 +200,19 @@ def print_statistics(db, geometries):
             res[k] = '3D geometry is corrupted'
         if 'boundary conditions not implemented (coronary)' in v:
             res[k] = 'Coronary\nboundary conditions'
-        if 'boundary conditions do not exist' in v:
-            res[k] = 'No boundary conditions'
+        if 'The number of BC values' in v:
+            res[k] = 'Missing boundary conditions'
         if 'unconverged' in v:
             res[k] = '1D simulation\nunconverged'
         if 'bifurcation with less than 2 outflows detected' in v:
             res[k] = 'Bifurcation is at outlet'
         if 'KeyError(None,)' in v:
             res[k] = 'Bifurcation is at inlet'
-        if 'object has no attribute' in v:
+        if 'Centerline consist of more than one region' in v:
             res[k] = 'Centerline consists of >1 piece'
         if 'success' in v:
             res[k] = success
-        if k == '0001_0001':
+        if k == '0001_0001' or k == '0106_0001':
             res[k] = '3D geometry contains a loop'
 
     errors = np.array([k for k in res.values()])
