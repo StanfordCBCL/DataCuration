@@ -2,19 +2,18 @@
 
 import numpy as np
 import os
+import meshio
 import pdb
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
-from vtk.util.numpy_support import numpy_to_vtk as n2v
 
-from common import input_args
-from get_bc_integrals import read_geo, write_geo
-from get_database import Database
+from vtk_functions import read_geo, cell_connectivity
+from get_database import input_args
 
 
 def main(db, geometries):
     """
-    Remove all results from volumetric mesh
+    Generate volume mesh for SimVascular: remove all unused arrays and reoder tet nodes
     """
     for geo in geometries:
         print('Running geometry ' + geo)
@@ -22,31 +21,34 @@ def main(db, geometries):
         if not os.path.exists(db.get_volume(geo)):
             continue
 
-        # read volume mesh with results
-        vol, vol_n, vol_c = read_geo(db.get_volume(geo))
+        # read volume mesh
+        vol = read_geo(db.get_volume(geo)).GetOutput()
 
-        # arrays to keep
-        remove = []
-        remove += [{'handle': vol_n, 'keep': ['GlobalNodeID'], 'remove': []}]
-        remove += [{'handle': vol_c, 'keep': ['GlobalElementID', 'BC_FaceID'], 'remove': []}]
+        # get geometry
+        points = v2n(vol.GetPoints().GetData())
+        cells = cell_connectivity(vol)
 
-        # collect array names to remove
-        for r in remove:
-            for i in range(r['handle'].GetNumberOfArrays()):
-                name = r['handle'].GetArrayName(i)
-                if name not in r['keep']:
-                    r['remove'] += [name]
+        # reorder nodes in tets to fix negative Jacobian
+        tets = cells['tetra'][:, [0, 1, 3, 2]]
+        cells['tetra'] = tets
 
-        # remove arrays
-        for r in remove:
-            for a in r['remove']:
-                r['handle'].RemoveArray(a)
+        # check if Jacobian determinant is positive everywhere
+        jac = np.zeros((tets.shape[0], 3, 3))
+        for i, p in enumerate([[1, 0], [2, 0], [3, 0]]):
+            jac[:, :, i] = points[tets[:, p[0]]] - points[tets[:, p[1]]]
+        if np.sum(np.linalg.det(jac) <= 0) != 0:
+            print('determinant is negative')
 
-        # export to generated folder
-        write_geo(db.get_volume_mesh(geo), vol)
+        # get arrays
+        point_data = {'GlobalNodeID': np.expand_dims(v2n(vol.GetPointData().GetArray('GlobalNodeID')), axis=1)}
+        cell_data = {'GlobalElementID': np.expand_dims(v2n(vol.GetCellData().GetArray('GlobalElementID')), axis=1)}
+
+        # write to file
+        mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
+        meshio.write(db.get_volume_mesh(geo), mesh)
 
 
 if __name__ == '__main__':
-    descr = 'Fix wrong GlobalElementID'
+    descr = 'Create volume mesh for SimVascular'
     d, g, _ = input_args(descr)
     main(d, g)
