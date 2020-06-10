@@ -11,7 +11,6 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 from get_bc_integrals import read_geo, write_geo
 from get_database import Database, input_args
-from get_sim import write_bc
 
 
 def get_indices(a, b):
@@ -69,9 +68,7 @@ def generate(db, geo):
     arrays['CapID']['array'][inflow] = 1
     arrays['CapID']['array'][outlets] = 2
 
-    # remove old arrays
-    surf_p.RemoveArray('GlobalNodeID')
-    surf_c.RemoveArray('GlobalElementID')
+    # remove old array
     surf_c.RemoveArray('BC_FaceID')
 
     # add new arrays
