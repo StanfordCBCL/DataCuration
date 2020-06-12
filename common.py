@@ -4,7 +4,7 @@ import argparse
 import os
 
 import numpy as np
-
+from collections import defaultdict
 
 def get_dict(fpath):
     """
@@ -19,3 +19,10 @@ def get_dict(fpath):
         return np.load(fpath, allow_pickle=True).item()
     else:
         return {}
+
+
+def rec_dict():
+    """
+    Recursive defaultdict
+    """
+    return defaultdict(rec_dict)
