@@ -205,7 +205,7 @@ def integrate_inlet(f_in):
     inlet = read_geo(f_in + '.vtp').GetOutput()
 
     # integrate over inlet
-    return integrate_surfaces(inlet, inlet.GetCellData(), 'velocity')
+    return integrate_surfaces(inlet, inlet.GetCellData(), 'velocity', face_array='ModelFaceID')
 
 
 def overwrite_inflow(db, geo, n_sample_real=256):
@@ -242,35 +242,41 @@ def overwrite_inflow(db, geo, n_sample_real=256):
 def check_inflow(db, geo):
     post = Post()
 
+    # create output folder
+    check_dir = os.path.join(db.get_solve_dir_3d(geo), 'check')
+    os.makedirs(os.path.join(check_dir), exist_ok=True)
+
     # define project paths
     f_in = os.path.join(db.get_solve_dir_3d(geo), 'bct')
-    f_out = os.path.join(db.get_solve_dir_3d(geo), geo + '_inflow')
+    f_out_fig = os.path.join(check_dir, geo + '_inflow')
+    f_out_vtp = os.path.join(check_dir, 'initial.vtp')
 
     # read inflow from file
     time, inflow = db.get_inflow(geo)
+    time_smooth, inflow_smooth = db.get_inflow_smooth(geo)
 
     # get model inlet from bct.dat and bct.vtp
     surf_int = integrate_inlet(f_in)
 
     # postproc initial conditions
     sv = SimVascular()
-    sv.run_post(db.get_solve_dir_3d(geo), ['-start', '0', '-stop', '0', '-incr', '1', '-vtkcombo', '-vtp', 'initial.vtp'])
+    sv.run_post(db.get_solve_dir_3d(geo), ['-start', '0', '-stop', '0', '-incr', '1', '-vtkcombo', '-vtp', 'check/initial.vtp'])
 
     # get initial conditions
-    fpath_surf = db.get_surfaces(geo, 'all_exterior')
-    f_initial = os.path.join(db.get_solve_dir_3d(geo), 'initial.vtp')
-    ini = integrate_bcs(fpath_surf, f_initial, ['pressure', 'velocity'])
+    fpath_surf = os.path.join(db.get_solve_dir_3d(geo), 'mesh-complete', 'mesh-surfaces', 'inflow.vtp')
+    ini = integrate_bcs(fpath_surf, f_out_vtp, ['pressure', 'velocity'], face_array='ModelFaceID')
 
     # plot comparison
     fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
-    plt.plot(time, inflow * post.convert['flow'], 'kx')
-    plt.plot(surf_int['time'], surf_int['velocity'] * post.convert['flow'], 'r-')
+    plt.plot(time_smooth, inflow_smooth * post.convert['flow'], 'g-')
+    plt.plot(surf_int['time'], surf_int['velocity'] * post.convert['flow'], 'r--')
     plt.plot(0, ini['velocity'][0][0] * post.convert['flow'], 'bo', fillstyle='none')
+    plt.plot(time, inflow * post.convert['flow'], 'kx')
     plt.xlabel('Time [s]')
     plt.ylabel('Flow [l/h]')
     plt.grid()
-    ax.legend(['OSMSC', 'Optimized for rerun', 'Initial condition for rerun'])
-    fig.savefig(f_out, bbox_inches='tight')
+    ax.legend(['Optimized for rerun', 'SimVascular', 'Initial condition for rerun', 'OSMSC'])
+    fig.savefig(f_out_fig, bbox_inches='tight')
     plt.cla()
 
 
