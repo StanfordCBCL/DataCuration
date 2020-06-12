@@ -55,6 +55,9 @@ def generate_1d(db, geo):
     else:
         return '3d results do not exist'
 
+    if db.has_loop(geo):
+        return '3d geometry contains a loop'
+
     # copy surface model to folder if it exists
     if os.path.exists(db.get_surfaces(geo, 'all_exterior')):
         shutil.copy2(db.get_surfaces(geo, 'all_exterior'), fpath_geo)
