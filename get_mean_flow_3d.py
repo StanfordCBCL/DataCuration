@@ -118,7 +118,10 @@ def extract_results(fpath_1d, fpath_3d, fpath_out):
                 points[i] -= eps_norm * normals[i]
 
         # create integration object (slice geometry at point/normal)
-        integral = get_integral(reader_3d, points[i], normals[i])
+        try:
+            integral = get_integral(reader_3d, points[i], normals[i])
+        except Exception:
+            continue
 
         # integrate all output arrays
         for name in res_names:
