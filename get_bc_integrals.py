@@ -58,8 +58,7 @@ def sort_faces(res_faces, area):
     # get time steps
     times = []
     for n in res_faces[list(res_faces)[0]].keys():
-        time, _ = split(n)
-        times.append(time)
+        times += [split(n)[0]]
     times = np.unique(np.array(times))
 
     # sort data in arrays according to time steps
@@ -89,22 +88,27 @@ def get_res_names(inp, res_fields):
     for i in range(inp.GetPointData().GetNumberOfArrays()):
         res_name = inp.GetPointData().GetArrayName(i)
         field = res_name.split('_')[0]
+        num = res_name.split('_')[-1]
 
         # check if field should be added to output
         if field in res_fields:
-            res += [res_name]
+            try:
+                float(num)
+                res += [res_name]
+            except ValueError:
+                pass
 
     return res
 
 
-def integrate_surfaces(surf, cell_surf, res_fields):
+def integrate_surfaces(surf, cell_surf, res_fields, face_array='BC_FaceID'):
     """
     Integrate desired fields on all caps of surface mesh (as defined by BC_FaceID)
     Args:
         surf: reader for surface mesh
         cell_surf: surface mesh cell data
         res_fields: result fields to extract
-
+        face_array: name of array containing face ids
     Returns:
         dictionary with result fields as keys and matrices with all faces and time steps as matrices
     """
@@ -122,7 +126,7 @@ def integrate_surfaces(surf, cell_surf, res_fields):
     res_names = get_res_names(surf, res_fields)
 
     # boundary faces
-    faces = np.unique(v2n(cell_surf.GetArray('BC_FaceID')).astype(int))
+    faces = np.unique(v2n(cell_surf.GetArray(face_array)).astype(int))
     res = {}
     area = {}
 
@@ -131,7 +135,7 @@ def integrate_surfaces(surf, cell_surf, res_fields):
         # skip face 0 (vessel wall)
         if f:
             # threshhold face
-            thresh = threshold(calc.GetOutput(), f, 'BC_FaceID')
+            thresh = threshold(calc.GetOutput(), f, face_array)
 
             # integrate over selected face (separately for pressure and velocity)
             integrator = Integration(thresh)
@@ -147,7 +151,7 @@ def integrate_surfaces(surf, cell_surf, res_fields):
     return sort_faces(res, area)
 
 
-def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
+def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out='', face_array='BC_FaceID'):
     """
     Perform all steps necessary to get results averaged on caps
     Args:
@@ -156,7 +160,7 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
         res_fields: results to extract
         debug: bool if debug geometry should be written
         debug_out: path for debug geometry
-
+        face_array: name of array containing face ids
     Returns:
         dictionary with result fields as keys and matrices with all faces and time steps as matrices
     """
@@ -171,7 +175,7 @@ def integrate_bcs(fpath_surf, fpath_vol, res_fields, debug=False, debug_out=''):
     transfer_solution(surf.GetPointData(), vol.GetPointData(), res_fields)
 
     # integrate data on boundary surfaces
-    res_faces = integrate_surfaces(surf, surf.GetCellData(), res_fields)
+    res_faces = integrate_surfaces(surf, surf.GetCellData(), res_fields, face_array=face_array)
 
     # write results for debugging in paraview
     if debug:
