@@ -80,9 +80,14 @@ def get_surf(db, geo):
     Generate arrays in surface mesh used by SimVascular
     """
     # get all surfaces
-    surfaces = glob.glob(os.path.join(db.fpath_gen, 'surfaces', geo, '*.vtp'))
+    surfaces = glob.glob(os.path.join(db.get_surface_dir(geo), '*.vtp'))
 
     for f_surf in surfaces:
+        # read volume mesh with results
+        surf = read_geo(f_surf).GetOutput()
+        surf_p = surf.GetPointData()
+        surf_c = surf.GetCellData()
+
         # get output name
         name_osmsc = os.path.basename(f_surf)
         if 'all_exterior' in name_osmsc:
@@ -91,14 +96,10 @@ def get_surf(db, geo):
             name = 'walls_combined.vtp'
         else:
             name = os.path.join('caps', name_osmsc)
-        f_out = os.path.join(db.get_sv_meshes(geo), name)
 
         print('  generating surface mesh ' + name)
 
-        # read volume mesh with results
-        surf = read_geo(f_surf).GetOutput()
-        surf_p = surf.GetPointData()
-        surf_c = surf.GetCellData()
+        f_out = os.path.join(db.get_sv_meshes(geo), name)
 
         # reconstruct SimVascular arrays from BC_FaceID
         face_id = v2n(surf_c.GetArray('BC_FaceID'))
@@ -188,6 +189,12 @@ def get_initial(db, geo):
     write_geo(db.get_initial_conditions(geo), initial)
 
 
+def get_meshes(db, geo):
+    get_initial(db, geo)
+    get_vol(db, geo)
+    get_surf(db, geo)
+
+
 def main(db, geometries):
     """
     Loop all geometries
@@ -195,9 +202,7 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        get_initial(db, geo)
-        get_vol(db, geo)
-        get_surf(db, geo)
+        get_meshes(db, geo)
 
 
 if __name__ == '__main__':
