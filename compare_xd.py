@@ -13,7 +13,8 @@ from scipy.interpolate import interp1d
 
 from common import rec_dict
 from get_database import Database, Post, input_args
-from simulation_io import get_caps_db, collect_results_db_1d_3d, collect_results_db_3d_3d
+from simulation_io import get_caps_db, collect_results_db_1d_3d, collect_results_db_3d_3d, \
+    collect_results_db_3d_3d_spatial
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
@@ -140,18 +141,20 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
     # get 1d/3d map
     caps = get_caps_db(db, geo)
+    cap_br = list(caps.values())
+    cap_names = list(caps.keys())
 
     # get cap names
     names = db.get_cap_names(geo)
 
-    if len(caps) > 50:
+    if len(res) > 50:
         dpi = opt['dpi'] / 2
         sharey = False
     else:
         dpi = opt['dpi']
         sharey = opt['sharey']
 
-    fig, ax = plt.subplots(len(post.fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=sharey)
+    fig, ax = plt.subplots(len(post.fields), len(res), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=sharey)
 
     # pick reference time step with highest inflow
     m_ref = '3d'
@@ -163,11 +166,15 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
             t_max[m] = np.argmin(np.abs(time[m_ref][t_max[m_ref]] - time[m]))
 
     for i, f in enumerate(post.fields):
-        for j, (c, br) in enumerate(caps.items()):
+        for j, br in enumerate(res.keys()):
             ax[i, j].grid(True)
 
             if opt['legend_row'] or i == 0:
-                ax[i, j].set_title(names[c])
+                if br in cap_br:
+                    name = cap_names[cap_br.index(br)]
+                else:
+                    name = 'branch ' + str(br)
+                ax[i, j].set_title(name)
             if opt['legend_row'] or i == len(post.fields) - 1:
                 ax[i, j].set_xlabel('Vessel path [cm]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
@@ -260,7 +267,7 @@ def plot_1d_3d_paper(db, opt, geo, res, time):
         plt.close(fig)
 
 
-def calc_error(db, opt, geo, res, time):
+def calc_error(db, geo, res, time):
     # get post-processing constants
     post = Post()
 
@@ -322,6 +329,35 @@ def calc_error(db, opt, geo, res, time):
     db.add_1d_3d_comparison(geo, err)
 
 
+def calc_error_spatial(db, geo):
+    res, time = collect_results_db_3d_3d_spatial(db, geo)
+
+    # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
+    interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
+
+    fields = ['pressure', 'velocity']
+
+    err = defaultdict(dict)
+    for f in fields:
+        res_3d_osmsc = res['3d'][f]
+        res_3d_rerun = interp(time['3d_rerun'], res['3d_rerun'][f], time['3d'][1:]).T
+
+        if f == 'pressure':
+            diff_rel = np.abs((res_3d_osmsc - res_3d_rerun) / res_3d_osmsc)
+        elif f == 'velocity':
+            diff = np.linalg.norm(res_3d_osmsc - res_3d_rerun, axis=2)
+            norm = np.max(np.linalg.norm(res_3d_osmsc, axis=2), axis=1)
+            diff_rel = (diff.T / norm).T
+        err[f]['avg'] = np.mean(diff_rel)
+        err[f]['max'] = np.max(diff_rel)
+
+    for f in fields:
+        for e in err[f]:
+            print(f, e, err[f][e])
+
+    db.add_3d_3d_comparison(geo, err)
+
+
 def main(db, geometries):
     # get post-processing constants
     post = Post()
@@ -344,14 +380,16 @@ def main(db, geometries):
         opt = {'legend_col': False,
                'legend_row': False,
                'sharex': True,
-               'sharey': False,#'row',
+               'sharey': 'row',
                'dpi': 200,
-               'w': 1 * (len(db.get_surface_names(geo)) * 2 + 2),
-               'h': 2 * (len(Post().fields) * 1 + 1)}
+               'w': 1 * (len(db.get_surface_names(geo)) * 3 + 4),
+               'h': 2 * (len(Post().fields) * 1 + 2)}
 
         # calculate error
         if '3d' in post.models and '1d' in post.models:
-            calc_error(db, opt, geo, res, time)
+            calc_error(db, geo, res, time)
+        elif '3d' in post.models and '3d_rerun' in post.models:
+            calc_error_spatial(db, geo)
 
         # generate plots
         print('plotting')

@@ -20,6 +20,7 @@ from get_database import input_args
 from vtk_functions import read_geo, collect_arrays, get_all_arrays
 from get_bc_integrals import get_res_names
 from vtk_to_xdmf import write_xdmf
+from postproc import map_meshes
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
@@ -89,12 +90,12 @@ def write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_cent, f_out):
     get_time('1d', res_1d, time)
 
     # write results to centerline
-    arrays = map_1d_to_centerline(arrays_cent, arrays_1d)
+    arrays = map_1d_to_centerline(arrays_cent, arrays_1d, res_1d, time)
 
     write_xdmf(geo_cent, arrays, f_out)
 
 
-def map_1d_to_centerline(arrays_cent, arrays_1d):
+def map_1d_to_centerline(arrays_cent, arrays_1d, res_1d, time):
     # assemble output dict
     rec_dd = lambda: defaultdict(rec_dd)
     arrays = rec_dd()
@@ -103,18 +104,18 @@ def map_1d_to_centerline(arrays_cent, arrays_1d):
     for name, data in arrays_cent.items():
         arrays['always']['point'][name] = data
 
-    # add 1d results
-    i_export = np.where(time['1d_last_cycle_i'])[0]
-
     # fields to export
     fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
+
+    # time steps to export
+    i_export = np.where(time['1d_last_cycle_i'])[0]
 
     # number of time steps
     n_t = res_1d[fields_res_1d[0]][0][0].shape[1]
 
     # loop all result fields
     for f in fields_res_1d:
-        array_f = np.zeros((geo_cent.GetNumberOfPoints(), n_t))
+        array_f = np.zeros((arrays_cent['Path'].shape[0], n_t))
 
         # loop all branches
         for br in res_1d[f].keys():
@@ -189,10 +190,9 @@ def load_results_3d(f_res_3d):
     return out
 
 
-def get_time(model, res, time):
+def get_time(model, res, time, dt_3d=0):
     if model == '3d_rerun':
-        dt = 4.0e-4
-        time[model + '_all'] = res['time'] * dt
+        time[model + '_all'] = res['time'] * dt_3d
     elif '3d' in model:
         time[model] = np.array([0] + res['time'].tolist())
         time[model + '_all'] = time[model]
@@ -202,10 +202,16 @@ def get_time(model, res, time):
 
     # time steps for last cycle
     if '3d' in time and (model == '1d' or model == '3d_rerun'):
-        n_cycle_1d = max(1, int(time[model + '_all'][-1] // time['3d'][-1]))
-        t_1d_first = time['3d'][-1] * (n_cycle_1d - 1)
-        time[model + '_last_cycle_i'] = time[model + '_all'] >= t_1d_first
-        time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_1d_first
+        # how many full cycles where completed?
+        n_cycle = max(1, int(time[model + '_all'][-1] // time['3d'][-1]))
+
+        # first and last time step in cycle
+        t_first = time['3d'][-1] * (n_cycle - 1)
+        t_last = time['3d'][-1] * n_cycle
+
+        # select last cycle and shift time to start from zero
+        time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first, time[model + '_all'] <= t_last)
+        time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_first
 
 
 def check_consistency(r_oned, res_1d, res_3d):
@@ -299,7 +305,7 @@ def res_1d_to_path(path, res):
     return np.array(path_1d), np.array(int_1d)
 
 
-def collect_results(model, res, time, f_res, centerline=None):
+def collect_results(model, res, time, f_res, centerline=None, dt_3d=0):
     # read results
     # todo: store 1d results in vtp as well
     if '1d' in model:
@@ -321,7 +327,7 @@ def collect_results(model, res, time, f_res, centerline=None):
     branches = get_branches(arrays)
 
     # simulation time steps
-    get_time(model, res_in, time)
+    get_time(model, res_in, time, dt_3d)
 
     # loop outlets
     for br in branches:
@@ -361,6 +367,42 @@ def collect_results(model, res, time, f_res, centerline=None):
                     res[br][f][model + '_cap'] = res[br][f][model + '_cap'][time[model + '_last_cycle_i']]
 
 
+def collect_results_spatial(model, res, time, f_res, dt_3d=0):
+    geo = read_geo(f_res).GetOutput()
+
+    # fields to export
+    fields = ['pressure', 'velocity']
+
+    # get all result array names
+    res_names = get_res_names(geo, fields)
+
+    # extract all point arrays
+    arrays, _ = get_all_arrays(geo)
+
+    # sort results according to GlobalNodeID
+    mask = map_meshes(arrays['GlobalNodeID'], np.arange(1, geo.GetNumberOfPoints() + 1))
+
+    # get time steps
+    times = np.unique([float(k.split('_')[1]) for k in res_names])
+
+    # simulation time steps
+    get_time(model,  {'time': times}, time, dt_3d)
+
+    # initialize results
+    res[model]['pressure'] = np.zeros((times.shape[0], geo.GetNumberOfPoints()))
+    res[model]['velocity'] = np.zeros((times.shape[0], geo.GetNumberOfPoints(), 3))
+
+    # extract results
+    for f in res_names:
+        n, t = f.split('_')
+        res[model][n][float(t) == times] = arrays[f][mask]
+
+    # extract periodic cycle
+    if model + '_last_cycle_i' in time:
+        for n in fields:
+            res[model][n] = res[model][n][time[model + '_last_cycle_i']]
+
+
 def collect_results_db_1d_3d(db, geo):
     # initialzie results dict
     res = defaultdict(lambda: defaultdict(dict))
@@ -392,7 +434,23 @@ def collect_results_db_3d_3d(db, geo):
 
     # collect results
     collect_results('3d', res, time, f_res_3d_osmsc)
-    collect_results('3d_rerun', res, time, f_res_3d_rerun)
+    collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo))
+
+    return res, time
+
+
+def collect_results_db_3d_3d_spatial(db, geo):
+    # initialzie results dict
+    res = defaultdict(lambda: defaultdict(dict))
+    time = {}
+
+    # get paths
+    f_res_3d_osmsc = db.get_volume(geo)
+    f_res_3d_rerun = db.get_res_3d_vol_rerun(geo)
+
+    # collect results
+    collect_results_spatial('3d', res, time, f_res_3d_osmsc)
+    collect_results_spatial('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo))
 
     return res, time
 
@@ -409,6 +467,11 @@ def export_1d_xmdf(db, geo):
 
 def main(db, geometries):
     for geo in geometries:
+        print('Processing ' + geo)
+
+        if not os.path.exists(db.get_1d_flow_path(geo)):
+            continue
+
         export_1d_xmdf(db, geo)
 
 
