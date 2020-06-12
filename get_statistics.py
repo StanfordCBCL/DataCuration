@@ -14,8 +14,12 @@ import subprocess
 
 import numpy as np
 
+from vtk.util.numpy_support import numpy_to_vtk as n2v
+from vtk.util.numpy_support import vtk_to_numpy as v2n
+
 from get_database import Database, SimVascular, Post, input_args
 from simulation_io import get_dict
+from vtk_functions import read_geo, write_geo, collect_arrays
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -38,9 +42,38 @@ def print_error(db, geometries):
             res[k] = v
 
     # make plots
+    plot_error_spatial(db, res, folder)
     plot_err_bar(res, folder)
-    plot_err_scatter(res, folder)
-    plot_img_scatter(db, res, folder)
+    plot_scatter(db, res, 'pts')
+    plot_scatter(db, res, 'img')
+
+
+def plot_error_spatial(db, res, folder):
+    # get post-processing constants
+    post = Post()
+
+    metric0 = ['avg', 'max']#, 'sys', 'dia'
+
+    for k in res:
+        # read centerline
+        cent = read_geo(db.get_centerline_path(k)).GetOutput()
+        arrays = collect_arrays(cent.GetPointData())
+        branches = arrays['BranchId']
+
+        for f in post.fields:
+            for m0 in metric0:
+                # write error to centerline
+                out = np.zeros(cent.GetNumberOfPoints())
+                for br, err in res[k][f]['spatial'][m0].items():
+                    out[branches == br] = err
+
+                # add array to centerline
+                array = n2v(out)
+                array.SetName(f + '_' + m0)
+                cent.GetPointData().AddArray(array)
+
+        # write to file
+        write_geo(os.path.join(folder, k + '.vtp'), cent)
 
 
 def plot_err_bar(res, folder):
@@ -85,98 +118,45 @@ def plot_bar(fig1, ax1, xtick, values, labels, order, m0, f, d, folder, name):
     fig1.savefig(fname, bbox_inches='tight')
 
 
-def plot_err_scatter(res, folder):
-    # plot different correlations of errors
-    combinations = [['flow', 'pressure'], ['area', 'flow'], ['area', 'pressure']]
+def plot_scatter(db, res, mode):
+    fsize = 70
+    fig1, ax1 = plt.subplots(dpi=100, figsize=(60, 30))
+    plt.rcParams.update({'font.size': fsize})
+    plt.rcParams['axes.linewidth'] = 2
 
-    domain = ['cap', 'int']
+    combinations = [['flow', 'pressure'], ['area', 'flow'], ['area', 'pressure']]
+    domain = {'cap': 'at caps', 'int': 'in branches'}
     metric0 = ['avg', 'max']#, 'sys', 'dia'
 
-    fig1, ax1 = plt.subplots(dpi=300, figsize=(12, 6))
     for c in combinations:
         fx = c[0]
         fy = c[1]
-
         for d in domain:
             for m0 in metric0:
-                ux = '1'
-                uy = '1'
-                scale = 100
-
                 plt.cla()
                 for geo, err in res.items():
-                    x = err[fx][d][m0]['all'] * scale
-                    y = err[fy][d][m0]['all'] * scale
+                    x = err[fx][d][m0]['all']
+                    y = err[fy][d][m0]['all']
+                    if mode == 'img':
+                        ab = AnnotationBbox(OffsetImage(plt.imread(db.get_png(geo))), (x, y), frameon=False)
+                        ax1.scatter(x, y, c='k')
+                        ax1.add_artist(ab)
+                    elif mode == 'pts':
+                        ax1.plot(x, y, 'o')
+                        ax1.annotate(geo, (x, y))
 
-                    ax1.plot(x, y, 'o')
-                    ax1.annotate(geo, (x, y))
-
-                plt.xlabel(m0 + ' ' + fx + ' error at ' + d + ' [' + ux + ']')
-                plt.ylabel(m0 + ' ' + fy + ' error at ' + d + ' [' + uy + ']')
+                plt.xlabel(fx.capitalize() + ' relative ' + m0 + '. error ' + domain[d], fontsize=fsize)
+                plt.ylabel(fy.capitalize() + ' relative ' + m0 + '. error ' + domain[d], fontsize=fsize)
                 plt.xscale('log')
                 plt.yscale('log')
-                plt.grid()
-                ax1.xaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
-                ax1.yaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
-                # if m0 == 'avg':
-                #     ax1.set_xlim(1, 200)
-                #     ax1.set_ylim(1, 200)
-                # elif m0 == 'max':
-                #     ax1.set_xlim(1, 1000)
-                #     ax1.set_ylim(1, 1000)
-                ax1.set_xlim(0.1, 100)
-                ax1.set_ylim(0.1, 100)
+                plt.grid(b=True, which='major', color='k', linestyle='-', linewidth=2)
+                plt.grid(b=True, which='minor', color='0.5', linestyle='-', linewidth=0.5)
+                ax1.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1, decimals=0))
+                ax1.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1, decimals=0))
 
-                fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '.png'
-                fpath = os.path.join(folder, fname)
+                fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '_' + mode + '.png'
+                fpath = os.path.join(db.get_statistics_dir(), fname)
                 fig1.savefig(fpath, bbox_inches='tight')
-    plt.close(fig1)
-
-
-def plot_img_scatter(db, res, folder):
-    fsize = 50
-    fig1, ax1 = plt.subplots(dpi=100, figsize=(60, 30))
-    plt.rcParams.update({'font.size': fsize})
-
-    domain = ['cap', 'int']
-    metric0 = ['avg', 'max']#, 'sys', 'dia'
-
-    for d in domain:
-        for m0 in metric0:
-            fx = 'flow'
-            fy = 'pressure'
-
-            ux = '1'
-            uy = '1'
-            scale = 100
-
-            plt.cla()
-            for geo, err in res.items():
-                x = err[fx][d][m0]['all'] * scale
-                y = err[fy][d][m0]['all'] * scale
-                ab = AnnotationBbox(OffsetImage(plt.imread(db.get_png(geo))), (x, y), frameon=False)
-                ax1.scatter(x, y, c='k')
-                ax1.add_artist(ab)
-
-            plt.xlabel(m0 + ' ' + fx + ' error at ' + d + ' [' + ux + ']', fontsize=fsize)
-            plt.ylabel(m0 + ' ' + fy + ' error at ' + d + ' [' + uy + ']', fontsize=fsize)
-            plt.xscale('log')
-            plt.yscale('log')
-            plt.grid()
-            ax1.xaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
-            ax1.yaxis.set_major_formatter(mtick.PercentFormatter(decimals=1))
-            # if m0 == 'avg':
-            #     ax1.set_xlim(1, 200)
-            #     ax1.set_ylim(1, 200)
-            # elif m0 == 'max':
-            #     ax1.set_xlim(1, 1000)
-            #     ax1.set_ylim(1, 1000)
-            ax1.set_xlim(0.1, 100)
-            ax1.set_ylim(0.1, 100)
-
-            fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '_img.png'
-            fpath = os.path.join(folder, fname)
-            fig1.savefig(fpath, bbox_inches='tight')
     plt.close(fig1)
 
 
@@ -212,7 +192,7 @@ def print_statistics(db, geometries):
             res[k] = 'Centerline consists of >1 piece'
         if 'success' in v:
             res[k] = success
-        if k == '0001_0001' or k == '0106_0001':
+        if 'loop' in v:
             res[k] = '3D geometry contains a loop'
 
     errors = np.array([k for k in res.values()])
