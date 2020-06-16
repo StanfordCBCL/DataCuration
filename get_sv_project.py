@@ -20,13 +20,16 @@ def get_sv_opt(db, geo):
     bc_type, err = db.get_bc_type(geo)
 
     # number of cycles
-    n_cycle = 3
+    n_cycle = 10
 
     # number of time steps
     numstep = int(float(params['sim_steps_per_cycle']))
 
     # time step
     dt = db.get_3d_timestep(geo)
+
+    # time increment
+    nt_out = db.get_3d_increment(geo)
 
     # read inflow conditions
     time, inflow = db.get_inflow_smooth(geo)
@@ -60,7 +63,7 @@ def get_sv_opt(db, geo):
            'num_krylov': '300',
            'num_solve': '1',
            'num_time': str(int(n_cycle * numstep + 100)),
-           'num_restart': '10',
+           'num_restart': str(nt_out),
            'bool_surf_stress': 'True',
            'coupling': 'Implicit',
            'print_avg_sol': 'True',
@@ -233,12 +236,12 @@ def write_mesh(db, geo):
             f.write(s + '\n')
 
 
-def write_inflow(db, geo, model, n_sample_real=256):
+def write_inflow(db, geo, model, n_mode=10, n_sample_real=256):
     # read inflow conditions
     time, inflow = db.get_inflow(geo)
 
     # smooth inflow
-    time, inflow = optimize_inflow(time, inflow, n_sample_real)
+    time, inflow = optimize_inflow(time, inflow, n_mode=n_mode, n_sample_real=n_sample_real)
 
     # reverse flow for svOneDSolver
     if model == '1d':

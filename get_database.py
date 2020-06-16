@@ -454,10 +454,14 @@ class Database:
 
     def get_inflow(self, geo):
         # read inflow conditions
+        if not os.path.exists(self.get_bc_flow_path(geo)):
+            return None, None
         flow = np.load(self.get_bc_flow_path(geo), allow_pickle=True).item()
 
         # read 3d boundary conditions
         bc_def, _ = self.get_bcs(geo)
+        if bc_def is None:
+            return None, None
 
         # extract inflow data
         time = flow['time']
@@ -603,6 +607,30 @@ class Database:
         # time step
         return time[-1] / numstep
 
+    def get_3d_increment(self, geo):
+        time, _ = self.get_inflow(geo)
+        if time is None:
+            return None
+
+        dt = self.get_3d_timestep(geo)
+        nt_out = 10
+
+        # exported time steps
+        time_export = time / dt
+
+        # round to nearest exported time step
+        time_post = np.rint(time_export / nt_out).astype(int) * nt_out
+        err = np.mean(np.abs(time_post - time_export))
+
+        # find increment in time steps
+        nt_out = np.unique(np.diff(np.rint(time_export).astype(int)))
+
+        # check if increment can be represented by a uniform series of integers
+        if len(nt_out) == 1:
+            return nt_out[0]
+        else:
+            return 1
+
 
 class SimVascular:
     """
@@ -684,8 +712,8 @@ class Post:
         self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
 
         # sets the plot order
-        # self.models = ['3d', '1d']
-        self.models = ['3d', '3d_rerun']
+        self.models = ['3d', '1d']
+        # self.models = ['3d', '3d_rerun']
 
 
 def run_command(run_folder, command):
