@@ -42,13 +42,14 @@ def print_error(db, geometries):
             res[k] = v
 
     # make plots
-    plot_error_spatial(db, res, folder)
+    # plot_error_spatial(db, geometries)
+    plot_error_centerline(db, res, folder)
     plot_err_bar(res, folder)
     plot_scatter(db, res, 'pts')
     plot_scatter(db, res, 'img')
 
 
-def plot_error_spatial(db, res, folder):
+def plot_error_centerline(db, res, folder):
     # get post-processing constants
     post = Post()
 
@@ -160,6 +161,49 @@ def plot_scatter(db, res, mode):
     plt.close(fig1)
 
 
+def plot_error_spatial(db, geometries):
+    # set global plot options
+    fig, ax = plt.subplots(2, 2, figsize=(14, 8), dpi=200)
+    plt.rcParams['axes.linewidth'] = 2
+
+    # read errors
+    f_path = db.get_3d_3d_comparison()
+    if not os.path.exists(f_path):
+        return
+    err = get_dict(f_path)
+
+    # select geometries
+    legend = [geo for geo in geometries if geo in err]
+
+    for i, f in enumerate(['pressure', 'velocity']):
+        for j, c in enumerate(['avg', 'max']):
+            # plot location
+            pos = (j, i)
+
+            # plot data points
+            lengths = []
+            for geo in legend:
+                e = err[geo][f][c]
+                x = np.arange(1, len(e) + 1)
+                lengths += [len(e)]
+                ax[pos].plot(x, e, 'o-')
+
+
+            # set plot options
+            ax[pos].grid(True)
+            ax[pos].set_xlabel('Cycle [1]')
+            ax[pos].set_ylabel(f.capitalize() + ' relative ' + c + ' error [1]')
+            ax[pos].ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+            ax[pos].legend(legend)
+            # ax[pos].set_yscale('log')
+            ax[pos].set_xticks(np.arange(1, np.max(lengths) + 1))
+    fname = '3d_3d_comparison.png'
+    fpath = os.path.join(db.get_statistics_dir(), fname)
+    fig.savefig(fpath, bbox_inches='tight')
+    plt.close(fig)
+
+
+
 def print_statistics(db, geometries):
     res_all = get_dict(db.get_log_file_1d())
 
@@ -204,6 +248,9 @@ def print_statistics(db, geometries):
         num_errors[err]['n'] = np.sum(errors == err)
         num_errors[err]['geos'] = [k for k, v in res.items() if v == err]
 
+    # remove no bcs
+    del num_errors['3d results do not exist']
+
     for err, geos in num_errors.items():
         print(err)
         print(geos['geos'])
@@ -246,7 +293,7 @@ def print_statistics(db, geometries):
     labels_error = list(num_errors.keys())
     labels = [num_errors[v]['g_string'] for v in labels_error]
     sizes = [num_errors[v]['n'] for v in labels_error]
-    assert np.sum(np.array(sizes)) == num_sim, 'wrong number of errors'
+    # assert np.sum(np.array(sizes)) == num_sim, 'wrong number of errors'
 
     explode = [0] * len(labels_error)
     explode[labels_error.index(success)] = 0.1
@@ -255,10 +302,9 @@ def print_statistics(db, geometries):
     fig1, ax1 = plt.subplots(dpi=300, figsize=(4, 4))
     ax1.axis('equal')
     # autopct = '%1.1f%%'
-    # autopct = lambda p: '{:.0f}'.format(p * total / 100)
+    autopct = lambda p: '{:.0f}'.format(p * np.sum(sizes) / 100)
 
-    labels_pie = ax1.pie(sizes, explode=explode, labels=labels_error,
-                         autopct=lambda p: '{:.0f}'.format(p * num_sim / 100), startangle=90)
+    labels_pie = ax1.pie(sizes, explode=explode, labels=labels_error, autopct=autopct, startangle=90)
     #textprops={'weight': 'bold', labeldistance=1)
 
     # for label in labels_pie[1]:

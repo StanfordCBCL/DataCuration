@@ -98,7 +98,7 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     names = db.get_cap_names(geo)
     
     if len(caps) > 50:
-        dpi = opt['dpi'] / 2
+        dpi = opt['dpi'] // 4
         sharey = False
     else:
         dpi = opt['dpi']
@@ -148,7 +148,7 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
     names = db.get_cap_names(geo)
 
     if len(res) > 50:
-        dpi = opt['dpi'] / 2
+        dpi = opt['dpi'] // 4
         sharey = False
     else:
         dpi = opt['dpi']
@@ -277,15 +277,11 @@ def calc_error(db, geo, res, time):
     # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
     interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
 
-    # error definitions
-    domain = {'cap': caps.values(), 'int': res.keys(), 'spatial': res.keys()}
-    metric = ['avg', 'max', 'sys', 'dia']
-
-    err = rec_dict()
-
+    # relative difference between two arrays
     rel_diff = lambda a, b: np.abs((a - b) / b)
 
     # get spatial error
+    err = rec_dict()
     for f in post.fields:
         for br in res.keys():
             # retrieve 3d results
@@ -339,21 +335,27 @@ def calc_error_spatial(db, geo):
 
     err = defaultdict(dict)
     for f in fields:
-        res_3d_osmsc = res['3d'][f]
-        res_3d_rerun = interp(time['3d_rerun'], res['3d_rerun'][f], time['3d'][1:]).T
+        err[f]['avg'] = []
+        err[f]['max'] = []
+        for i in np.arange(1, time['3d_rerun_n_cycle'] + 1):
+            res_3d_osmsc = res['3d'][f]
+            res_3d_rerun_time = res['3d_rerun'][f][time['3d_rerun_i_cycle_' + str(i)]]
+            res_3d_rerun = interp(time['3d_rerun_cycle_' + str(i)], res_3d_rerun_time, time['3d'][1:]).T
 
-        if f == 'pressure':
-            diff_rel = np.abs((res_3d_osmsc - res_3d_rerun) / res_3d_osmsc)
-        elif f == 'velocity':
-            diff = np.linalg.norm(res_3d_osmsc - res_3d_rerun, axis=2)
-            norm = np.max(np.linalg.norm(res_3d_osmsc, axis=2), axis=1)
-            diff_rel = (diff.T / norm).T
-        err[f]['avg'] = np.mean(diff_rel)
-        err[f]['max'] = np.max(diff_rel)
+            if f == 'pressure':
+                diff_rel = np.abs((res_3d_osmsc - res_3d_rerun) / res_3d_osmsc)
+            elif f == 'velocity':
+                diff = np.linalg.norm(res_3d_osmsc - res_3d_rerun, axis=2)
+                norm = np.max(np.linalg.norm(res_3d_osmsc, axis=2), axis=1)
+                diff_rel = (diff.T / norm).T
+            err[f]['avg'] += [np.mean(diff_rel)]
+            err[f]['max'] += [np.max(diff_rel)]
 
     for f in fields:
         for e in err[f]:
             print(f, e, err[f][e])
+
+    # todo: write spatial error to geometry
 
     db.add_3d_3d_comparison(geo, err)
 
@@ -369,6 +371,7 @@ def main(db, geometries):
         if '3d' in post.models and '1d' in post.models:
             res, time = collect_results_db_1d_3d(db, geo)
         elif '3d' in post.models and '3d_rerun' in post.models:
+            calc_error_spatial(db, geo)
             res, time = collect_results_db_3d_3d(db, geo)
         else:
             raise ValueError('Unknown combination of models')
@@ -388,8 +391,6 @@ def main(db, geometries):
         # calculate error
         if '3d' in post.models and '1d' in post.models:
             calc_error(db, geo, res, time)
-        elif '3d' in post.models and '3d_rerun' in post.models:
-            calc_error_spatial(db, geo)
 
         # generate plots
         print('plotting')
