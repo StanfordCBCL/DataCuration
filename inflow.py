@@ -46,16 +46,13 @@ def error(time, inflow, time_smooth, inflow_smooth):
     return np.sqrt(np.sum((inflow - inflow_interp) ** 2))
 
 
-def optimize_inflow(time, inflow, n_sample_real=256):
+def optimize_inflow(time, inflow, n_mode=10, n_sample_real=256, debug=False):
     """
     Optimize fourier-smoothed inflow to interpolate input inflow
     """
-    assert n_sample_real % 2 == 0, 'odd number of samples'
-
     # define fourier smoothing
+    assert n_sample_real % 2 == 0, 'odd number of samples'
     n_sample_freq = n_sample_real // 2
-    n_mode = 10
-    debug = False
 
     # insert last 3d time step as 1d initial condition (periodic solution)
     time = np.insert(time, 0, 0)
@@ -95,6 +92,42 @@ def optimize_inflow(time, inflow, n_sample_real=256):
         plt.show()
 
     return time_out, inflow_out
+
+
+def error_phase(t1, f1, t2, f2, dt):
+    # period
+    p = t2[-1]
+
+    # shift and replicate
+    t2_cyc = np.hstack((t2[:-1] - p, t2, t2[1:] + p)) + dt
+    f2_cyc = np.hstack((f2[:-1], f2, f2[1:]))
+
+    # interpolate to coarse time
+    f2_interp = interp1d(t2_cyc, f2_cyc)(t1)
+
+    return np.sum((f1 - f2_interp) ** 2)
+
+
+def phase_shift(t, f, dt):
+    # period
+    p = t[-1]
+
+    # shift and replicate
+    t_cyc = np.hstack((t[:-1] - p, t, t[1:] + p)) + dt
+    f_cyc = np.hstack((f[:-1], f, f[1:]))
+
+    # interpolate to original time
+    return interp1d(t_cyc, f_cyc)(t)
+
+
+def optimize_phase(t1, f1, t2, f2, debug=False):
+    # setup otimization problem
+    run = lambda x: error_phase(t1, f1, t2, f2, x)
+
+    # find time shift to match inflow profile
+    res = minimize(run, [0.15], tol=1.0e-8, options={'disp': debug}, bounds=((-t2[-1]/4, t2[-1]/4), ))
+
+    return res.x[0]
 
 
 def read_velocity(f_dat):
@@ -216,7 +249,7 @@ def overwrite_inflow(db, geo, n_sample_real=256):
     f_in = os.path.join(db.get_solve_dir_3d(geo), 'bct')
 
     # read inflow from file
-    time, inflow = db.get_inflow(geo)
+    time, inflow = db.get_inflow_osmsc(geo)
 
     # fit inflow using fourier smoothing
     time, inflow = optimize_inflow(time, inflow, n_sample_real)
@@ -228,6 +261,7 @@ def overwrite_inflow(db, geo, n_sample_real=256):
     surf_int = integrate_inlet(f_in)
 
     # scale velocity
+    pdb.set_trace()
     vel_scaled = vel_dat / surf_int['velocity'] * np.expand_dims(inflow, axis=1)
 
     # overwrite bct.dat
@@ -269,8 +303,8 @@ def check_inflow(db, geo):
     # plot comparison
     fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
     plt.plot(time_smooth, inflow_smooth * post.convert['flow'], 'g-')
-    plt.plot(surf_int['time'], surf_int['velocity'] * post.convert['flow'], 'r--')
-    plt.plot(0, ini['velocity'][0][0] * post.convert['flow'], 'bo', fillstyle='none')
+    plt.plot(surf_int['time'], surf_int['velocity'][:, -1] * post.convert['flow'], 'r--')
+    plt.plot(0, ini['velocity'][0][-1] * post.convert['flow'], 'bo', fillstyle='none')
     plt.plot(time, inflow * post.convert['flow'], 'kx')
     plt.xlabel('Time [s]')
     plt.ylabel('Flow [l/h]')
@@ -280,10 +314,59 @@ def check_inflow(db, geo):
     plt.cla()
 
 
+def compare_inflows(db, geo):
+    t1, f1 = db.get_inflow(geo)
+    if t1 is None:
+        return
+
+    if geo == '0174_0000':
+        geo_in = '0176_0000'
+    elif geo == '0176_0000':
+        geo_in = '0174_0000'
+    else:
+        geo_in = geo
+    t2, f2 = db.get_inflow_osmsc(geo_in)
+
+    # minimize difference between inflows by shifting in time
+    dt = optimize_phase(t1, f1, t2, f2)
+    f2 = phase_shift(t2, f2, dt)
+
+    # interpolate to coarse time steps
+    f12 = interp1d(t2, f2)(t1)
+
+    # fix scaling
+    if geo == '0174_0000' or geo == '0176_0000':
+        a = np.min(f1) / np.min(f12)
+        f12 *= a
+        f2 *= a
+
+    # error between flow profiles
+    err = np.max(np.abs(f1 - f12)) / np.abs(np.mean(f1))
+
+    # save
+    if err < 0.1:
+        np.savetxt(db.get_inflow_smooth_path(geo), np.vstack((t2, f2)).T)
+
+    print(geo, "{:.2e}".format(err))
+    if True:
+        fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
+        post = Post()
+        plt.plot(t1, f1 * post.convert['flow'], 'k-')
+        plt.plot(t2, f2 * post.convert['flow'], 'r--')
+        plt.xlabel('Time [s]')
+        plt.ylabel('Flow [l/h]')
+        ax.legend(['Inflow from results', 'Inflow from extras'])
+        ax.grid(True)
+        f_out = os.path.join('/home/pfaller/work/osmsc/data_generated/check_inflows', geo)
+        fig.savefig(f_out, bbox_inches='tight')
+        plt.close(fig)
+
+
 def main(db, geometries):
     for geo in geometries:
-        print('Checking geometry ' + geo)
-        check_inflow(db, geo)
+        # print('Checking geometry ' + geo)
+        # check_inflow(db, geo)
+        compare_inflows(db, geo)
 
 
 if __name__ == '__main__':
