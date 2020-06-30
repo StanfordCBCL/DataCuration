@@ -82,11 +82,17 @@ class Database:
         # folder for paths and segmentations
         self.fpath_seg_path = '/home/pfaller/work/osmsc/data_additional/models/'
 
+        # folder for extras
+        self.fpath_extras = '/home/pfaller/work/osmsc/data_additional/sim_files_extra/'
+
         # folder for simulation studies
         self.fpath_studies = '/home/pfaller/work/osmsc/studies'
 
         # folder containing model images
         self.fpath_png = '/home/pfaller/work/osmsc/data_png'
+
+        # folder containing images for paper
+        self.img_path = '/home/pfaller/work/osmsc/images'
 
         # folder for simulation studies
         self.fpath_study = os.path.join(self.fpath_studies, self.study)
@@ -139,6 +145,11 @@ class Database:
 
             # exclude geometries
             geometries = self.exclude_geometries(geometries)
+        elif name =='coarctation':
+            geometries = ['0066_0001', '0067_0001', '0068_0001', '0069_0001', '0070_0001', '0071_0001', '0072_0001',
+                          '0073_0001', '0074_0001', '0106_0001', '0107_0001', '0111_0001', '0090_0001', '0091_0001',
+                          '0092_0001', '0093_0001', '0094_0001', '0095_0001', '0101_0001', '0102_0001', '0103_0001',
+                          '0104_0001', '0105_0001']
         elif name == 'fix_surf_id':
             geometries = ['0140_2001', '0144_1001', '0147_1001', '0160_6001', '0161_0001', '0162_3001', '0163_0001']
         elif name == 'fix_surf_discr':
@@ -414,7 +425,7 @@ class Database:
         self.add_dict(self.get_1d_3d_comparison(), geo, err)
 
     def get_3d_3d_comparison(self):
-        return os.path.join(os.path.dirname(self.get_post_path('', '')), '3d_3d_comparison.npy')
+        return os.path.join(self.gen_file('3d_3d_comparison', '', ''), '3d_3d_comparison.npy')
 
     def add_3d_3d_comparison(self, geo, err):
         self.add_dict(self.get_3d_3d_comparison(), geo, err)
@@ -452,6 +463,25 @@ class Database:
     def get_seg_dir(self, geo):
         return os.path.join(self.get_seg_path(geo), geo + '_groups-cm')
 
+    def get_inflow_osmsc(self, geo):
+        fpath = os.path.join(self.fpath_extras, geo, 'extras', 'bctdat-in-cm.flow.txt')
+        if not os.path.exists(fpath):
+            return None, None
+
+        # read from file
+        flow = np.loadtxt(fpath)
+        time, inflow = flow[:, 0], flow[:, 1]
+
+        # get simulation parameters
+        _, params = self.get_bcs(geo)
+        if params is None:
+            return None, None
+
+        # fix flow in last time step
+        inflow[-1] = inflow[0]
+
+        return time, inflow
+
     def get_inflow(self, geo):
         # read inflow conditions
         if not os.path.exists(self.get_bc_flow_path(geo)):
@@ -469,9 +499,16 @@ class Database:
 
         return time, inflow
 
+    def get_inflow_smooth_path(self, geo):
+        return os.path.join(self.fpath_gen, 'inflow', geo + '.txt')
+
     def get_inflow_smooth(self, geo):
-        m = np.loadtxt(self.get_sv_flow_path(geo, '3d'))
-        return m[:, 0], m[:, 1]
+        f = self.get_inflow_smooth_path(geo)
+        if os.path.exists(f):
+            m = np.loadtxt(f)
+            return m[:, 0], m[:, 1]
+        else:
+            return None, None
 
     def get_surfaces_upload(self, geo):
         surfaces = glob.glob(os.path.join(self.fpath_sim, geo, 'extras', 'mesh-surfaces', '*.vtp'))
@@ -542,10 +579,10 @@ class Database:
         return os.path.join(self.get_sv_meshes(geo), geo + '.vtu')
 
     def get_res_3d_vol_rerun(self, geo):
-        return os.path.join(self.fpath_study, '3d_flow', geo, geo + '.vtu')
+        return os.path.join(self.fpath_study, '3d_flow', geo + '.vtu')
 
     def get_res_3d_surf_rerun(self, geo):
-        return os.path.join(self.fpath_study, '3d_flow', geo, geo + '.vtp')
+        return os.path.join(self.fpath_study, '3d_flow', geo + '.vtp')
 
     def get_outlet_names(self, geo):
         bc_def, _ = self.get_bcs(geo)
