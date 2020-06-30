@@ -124,7 +124,7 @@ def get_surf(db, geo):
             arrays[n] = {'handle': surf_c, 'array': np.zeros(surf.GetNumberOfCells(), dtype=np.int64)}
 
         # rename
-        arrays['ModelFaceID']['array'] = face_id
+        arrays['ModelFaceID']['array'] = face_id + 1
 
         # all caps
         arrays['ActiveCells']['array'][caps] = 1
