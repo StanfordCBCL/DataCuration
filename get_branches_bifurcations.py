@@ -11,7 +11,6 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 
 from get_database import Database, SimVascular, input_args
 from vtk_functions import read_geo, write_geo, collect_arrays, threshold, geo, clean, region_grow, region_grow_simultaneous, ClosestPoints
-from vmtk import vtkvmtk, vmtkscripts
 
 from collections import defaultdict
 
