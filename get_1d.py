@@ -86,6 +86,11 @@ def generate_1d(db, geo):
     if constants is None:
         return 'boundary conditions do not exist'
 
+    # get inflow
+    time, _ = db.get_inflow_smooth(geo)
+    if time is None:
+        return 'inflow does not exist'
+
     # reference pressure (= initial pressure?)
     pref = res_3d['pressure'][-1, 0]
 
@@ -97,19 +102,15 @@ def generate_1d(db, geo):
     fpath_outlets = os.path.join(fpath_1d, 'outlets')
     shutil.copy(db.get_centerline_outlet_path(geo), fpath_outlets)
 
-    # read inflow conditions
-    flow = np.load(db.get_bc_flow_path(geo), allow_pickle=True).item()
-
     # set simulation time as end of 3d simulation
     save_data_freq = 1
     dt = 1e-3
 
     # run all cycles
-    num_dts = int(flow['time'][-1] * n_cycle / dt + 1.0)
+    num_dts = int(time[-1] * n_cycle / dt + 1.0)
 
     # write inflow
-    n_step = math.ceil((flow['time'][-1]/dt + 1) / 2.) * 2
-    write_inflow(db, geo, '1d', n_step)
+    write_inflow(db, geo, '1d')
 
     try:
     # if True:
