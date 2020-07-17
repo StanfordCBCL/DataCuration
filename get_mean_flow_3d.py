@@ -1,19 +1,12 @@
 #!/usr/bin/env python
 import vtk
 import os
-import pdb
-import scipy
-import meshio
-import argparse
 import numpy as np
 
-from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
-from numpy import array2string as a2s
-from scipy.spatial import KDTree
 
 from get_bc_integrals import get_res_names
-from get_database import Database, input_args
+from get_database import input_args
 from vtk_functions import read_geo, write_geo, calculator, cut_plane, connectivity, get_points_cells, clean, Integration
 
 import matplotlib.pyplot as plt
