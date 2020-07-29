@@ -98,7 +98,7 @@ def extract_results(fpath_1d, fpath_3d, fpath_out):
     for i in range(reader_1d.GetNumberOfPoints()):
         # print progress
         if (i + 1) % (reader_1d.GetNumberOfPoints() // 10) == 0:
-            print('  ' + str((i + i) * 100 // reader_1d.GetNumberOfPoints()) + '%')
+            print('  ' + str((i + 1) * 100 // reader_1d.GetNumberOfPoints()) + '%')
 
         # check if point is cap
         reader_1d.GetPointCells(i, ids)
