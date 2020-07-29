@@ -2,6 +2,7 @@
 
 import numpy as np
 import sys
+import os
 import argparse
 import pdb
 
@@ -11,7 +12,7 @@ from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationB
 from collections import OrderedDict, defaultdict
 from scipy.interpolate import interp1d
 
-from common import rec_dict
+from common import rec_dict, get_dict
 from get_database import Database, Post, input_args
 from simulation_io import get_caps_db, collect_results_db_1d_3d, collect_results_db_3d_3d, \
     collect_results_db_3d_3d_spatial
@@ -22,6 +23,8 @@ import sv_1d_simulation as oned
 
 
 def add_image(db, geo, fig):
+    if not os.path.exists(db.get_png(geo)):
+        return
     im = plt.imread(db.get_png(geo))
     newax = fig.add_axes([-0.22, 0.3, 0.3, 0.3], anchor='NE')#, zorder=-1
     newax.imshow(im)
@@ -96,6 +99,9 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     
     # get cap names
     names = db.get_cap_names(geo)
+
+    # get 0d bcs
+    bc_0d = get_dict(db.get_bc_0D_path(geo))
     
     if len(caps) > 50:
         dpi = opt['dpi'] // 4
@@ -125,7 +131,12 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
             lg = []
             for m in post.models:
                 ax[i, j].plot(time[m], res[br][f][m + '_cap'] * post.convert[f], post.styles[m])
-                lg.append(m.upper())
+                lg += [m.upper()]
+
+            if f == 'pressure' and bc_0d:
+                if br in bc_0d[f]:
+                    ax[i, j].plot(bc_0d['time'], bc_0d[f][br] * post.convert[f], 'k--')
+                    lg += ['0D BC']
 
             ax[i, j].legend(lg)
 
@@ -176,7 +187,7 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
                     name = 'branch ' + str(br)
                 ax[i, j].set_title(name)
             if opt['legend_row'] or i == len(post.fields) - 1:
-                ax[i, j].set_xlabel('Vessel path [cm]')
+                ax[i, j].set_xlabel('Vessel path [1]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
             if opt['legend_col'] or j == 0:
                 ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
@@ -184,7 +195,8 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
             lg = []
             for m in post.models:
-                ax[i, j].plot(res[br][m + '_path'], res[br][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
+                path = res[br][m + '_path']
+                ax[i, j].plot(path / path[-1], res[br][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
                 lg.append(m)
 
             ax[i, j].legend(lg)
@@ -287,17 +299,23 @@ def calc_error(db, geo, res, time):
             # retrieve 3d results
             res_3d = res[br][f]['3d_int']
 
+            # map paths to interval [0, 1]
+            path_1d = res[br]['1d_path'] / res[br]['1d_path'][-1]
+            path_3d = res[br]['3d_path'] / res[br]['3d_path'][-1]
+
             # interpolate in space and time
-            res_1d = interp(res[br]['1d_path'], res[br][f]['1d_int'], res[br]['3d_path'])
+            res_1d = interp(path_1d, res[br][f]['1d_int'], path_3d)
             res_1d = interp(time['1d'], res_1d, time['3d'])
 
             # calculate spatial error (eliminate time dimension)
             if f == 'pressure' or f == 'area':
-                err[f]['spatial']['avg'][br] = np.mean(rel_diff(res_1d, res_3d), axis=1)
-                err[f]['spatial']['max'][br] = np.max(rel_diff(res_1d, res_3d), axis=1)
+                diff = rel_diff(res_1d, res_3d)
+                err[f]['spatial']['avg'][br] = np.mean(diff, axis=1)
+                err[f]['spatial']['max'][br] = np.max(diff, axis=1)
             elif f == 'flow':
-                err[f]['spatial']['avg'][br] = np.mean(np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1)), axis=0)
-                err[f]['spatial']['max'][br] = np.max(np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1)), axis=0)
+                diff = np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1))
+                err[f]['spatial']['avg'][br] = np.mean(diff, axis=0)
+                err[f]['spatial']['max'][br] = np.max(diff, axis=0)
 
             err[f]['spatial']['sys'][br] = np.abs(rel_diff(np.max(res_1d, axis=1), np.max(res_3d, axis=1)))
             err[f]['spatial']['dia'][br] = np.abs(rel_diff(np.min(res_1d, axis=1), np.min(res_3d, axis=1)))
@@ -325,41 +343,6 @@ def calc_error(db, geo, res, time):
     db.add_1d_3d_comparison(geo, err)
 
 
-def calc_error_spatial(db, geo):
-    res, time = collect_results_db_3d_3d_spatial(db, geo)
-
-    # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
-    interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
-
-    fields = ['pressure', 'velocity']
-
-    err = defaultdict(dict)
-    for f in fields:
-        err[f]['avg'] = []
-        err[f]['max'] = []
-        for i in np.arange(1, time['3d_rerun_n_cycle'] + 1):
-            res_3d_osmsc = res['3d'][f]
-            res_3d_rerun_time = res['3d_rerun'][f][time['3d_rerun_i_cycle_' + str(i)]]
-            res_3d_rerun = interp(time['3d_rerun_cycle_' + str(i)], res_3d_rerun_time, time['3d'][1:]).T
-
-            if f == 'pressure':
-                diff_rel = np.abs((res_3d_osmsc - res_3d_rerun) / res_3d_osmsc)
-            elif f == 'velocity':
-                diff = np.linalg.norm(res_3d_osmsc - res_3d_rerun, axis=2)
-                norm = np.max(np.linalg.norm(res_3d_osmsc, axis=2), axis=1)
-                diff_rel = (diff.T / norm).T
-            err[f]['avg'] += [np.mean(diff_rel)]
-            err[f]['max'] += [np.max(diff_rel)]
-
-    for f in fields:
-        for e in err[f]:
-            print(f, e, err[f][e])
-
-    # todo: write spatial error to geometry
-
-    db.add_3d_3d_comparison(geo, err)
-
-
 def main(db, geometries):
     # get post-processing constants
     post = Post()
@@ -371,7 +354,6 @@ def main(db, geometries):
         if '3d' in post.models and '1d' in post.models:
             res, time = collect_results_db_1d_3d(db, geo)
         elif '3d' in post.models and '3d_rerun' in post.models:
-            calc_error_spatial(db, geo)
             res, time = collect_results_db_3d_3d(db, geo)
         else:
             raise ValueError('Unknown combination of models')
