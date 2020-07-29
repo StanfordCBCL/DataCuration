@@ -46,6 +46,15 @@ def main():
             bc = 'no'
         properties[geo]['has_bcs'] = bc
 
+    # get inflow type
+    for geo in geometries:
+        bc_def, params = db.get_bcs(geo)
+        if bc_def is None:
+            inflow = 'none'
+        else:
+            inflow = bc_def['bc']['inflow']['type']
+        properties[geo]['inflow_type'] = inflow
+
     with open('osmsc2.csv', 'w', newline='') as csvfile:
         reader = csv.writer(csvfile, delimiter=',')
 
