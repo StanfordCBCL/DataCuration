@@ -32,11 +32,7 @@ def calc_error_spatial(res, time):
             res_3d_rerun_time = res['3d_rerun'][f][time['3d_rerun_i_cycle_' + str(i)]]
             res_3d_rerun = interp(time['3d_rerun_cycle_' + str(i)], res_3d_rerun_time, time['3d'][1:]).T
 
-            # difference of means
-            # if False:
-            #     res_3d_osmsc = np.mean(res_3d_osmsc, axis=0)
-            #     res_3d_rerun = np.mean(res_3d_rerun, axis=0)
-
+            # calculate spatial error
             if f == 'velocity':
                 delta = np.linalg.norm(res_3d_osmsc - res_3d_rerun, axis=-1)
                 norm = np.mean(np.linalg.norm(res_3d_osmsc, axis=-1))
@@ -49,6 +45,9 @@ def calc_error_spatial(res, time):
             diff = delta ** 2
             err[f]['avg'] += [np.sqrt(np.mean(diff)) / norm]
             err[f]['max'] += [np.sqrt(np.max(diff)) / norm]
+
+            # calculate periodicity error
+            err[f]['cyc'] += [np.abs(res_3d_rerun[-1] - res_3d_rerun[0]) / (np.max(res_3d_rerun) - np.min(res_3d_rerun))]
 
     for f in fields:
         for e in err[f]:
