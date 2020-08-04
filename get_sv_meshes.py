@@ -154,7 +154,7 @@ def get_surf(db, geo):
         write_geo(f_out, normals.GetOutput())
 
 
-def get_initial(db, geo):
+def get_initial(db, geo, from_1d=True):
     fpath = db.get_volume(geo)
 
     if not os.path.exists(fpath):
@@ -184,6 +184,21 @@ def get_initial(db, geo):
             continue
         if t_last not in name:
             initial.GetPointData().RemoveArray(name)
+
+    # get initial conditions from 1d
+    if from_1d:
+        geo_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput()
+        pres = geo_1d.GetPointData().GetArray('pressure')
+
+        # find name of pressure array
+        for i in range(initial.GetPointData().GetNumberOfArrays()):
+            name = initial.GetPointData().GetArrayName(i)
+            if 'pressure' in name:
+                break
+        pres.SetName(name)
+
+        # overwrite pressure
+        initial.GetPointData().AddArray(pres)
 
     # write to file
     write_geo(db.get_initial_conditions(geo), initial)
