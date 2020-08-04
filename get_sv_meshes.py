@@ -12,7 +12,7 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 from get_bc_integrals import get_res_names, read_geo, write_geo
 from get_database import Database, input_args
-from vtk_functions import read_geo, write_geo, cell_connectivity
+from vtk_functions import read_geo, write_geo, cell_connectivity, collect_arrays
 
 
 def jacobian_positive(points, tets):
@@ -25,12 +25,13 @@ def jacobian_positive(points, tets):
     return np.sum(np.linalg.det(jac) <= 0.0) == 0
 
 
-def get_vol(db, geo):
+def get_vol(db, geo, ini_from_1d=True):
     """
     Generate volume mesh for SimVascular: remove all unused arrays and reoder tet nodes
     """
     f_vol = db.get_volume(geo)
     f_out = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
+    f_ini = db.get_initial_conditions(geo)
 
     if not os.path.exists(f_vol):
         print('  no volume mesh')
@@ -60,9 +61,29 @@ def get_vol(db, geo):
     point_data = {'GlobalNodeID': np.expand_dims(v2n(vol.GetPointData().GetArray('GlobalNodeID')), axis=1)}
     cell_data = {'GlobalElementID': np.expand_dims(v2n(vol.GetCellData().GetArray('GlobalElementID')), axis=1)}
 
-    # write to file
+    # write raw write to file
     mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
     meshio.write(f_out, mesh)
+
+    # get results
+    res = collect_arrays(vol.GetPointData())
+
+    # get last time step
+    times = np.unique([float(k.split('_')[1]) for k in res.keys() if '_' in k])
+    t_last = str(times[-1])
+
+    # add initial conditions
+    for k in res.keys():
+        if t_last in k:
+            if 'ini_from_1d' and 'pressure' in k:
+                geo_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput()
+                point_data[k] = v2n(geo_1d.GetPointData().GetArray('pressure'))
+            else:
+                point_data[k] = res[k]
+
+    # write initial conditions to file
+    mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
+    meshio.write(f_ini, mesh)
 
 
 def get_indices(a, b):
@@ -154,58 +175,7 @@ def get_surf(db, geo):
         write_geo(f_out, normals.GetOutput())
 
 
-def get_initial(db, geo, from_1d=True):
-    fpath = db.get_volume(geo)
-
-    if not os.path.exists(fpath):
-        print('  no initial conditions')
-        return
-
-    print('  generating initial condition mesh')
-
-    # read 3d results
-    reader_3d = read_geo(fpath).GetOutput()
-
-    # intial conditions
-    initial = vtk.vtkUnstructuredGrid()
-    initial.DeepCopy(reader_3d)
-
-    # get all result array names
-    res_names = get_res_names(reader_3d, ['pressure', 'velocity'])
-
-    # get last time step
-    times = np.unique([float(k.split('_')[1]) for k in res_names])
-    t_last = str(times[-1])
-
-    # remove everything except last time step
-    for i in range(reader_3d.GetPointData().GetNumberOfArrays()):
-        name = reader_3d.GetPointData().GetArrayName(i)
-        if name == 'GlobalNodeID':
-            continue
-        if t_last not in name:
-            initial.GetPointData().RemoveArray(name)
-
-    # get initial conditions from 1d
-    if from_1d:
-        geo_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput()
-        pres = geo_1d.GetPointData().GetArray('pressure')
-
-        # find name of pressure array
-        for i in range(initial.GetPointData().GetNumberOfArrays()):
-            name = initial.GetPointData().GetArrayName(i)
-            if 'pressure' in name:
-                break
-        pres.SetName(name)
-
-        # overwrite pressure
-        initial.GetPointData().AddArray(pres)
-
-    # write to file
-    write_geo(db.get_initial_conditions(geo), initial)
-
-
 def get_meshes(db, geo):
-    get_initial(db, geo)
     get_vol(db, geo)
     get_surf(db, geo)
 
