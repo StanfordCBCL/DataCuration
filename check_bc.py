@@ -20,7 +20,7 @@ from simulation_io import get_caps_db, collect_results, collect_results_db_3d_3d
 from compare_1d import add_image
 from get_bcs import get_in_model_units
 from get_sv_project import coronary_sv_to_oned
-from rcr import run_rcr, run_coronary
+from bc_0d import run_rcr, run_coronary
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -54,7 +54,6 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
         t_rcr = p['C'] * p['Rd']
     elif 'R1' in p:
         t_rcr = p['C2'] * p['R2']
-        t_rcr *= 1
     else:
         raise ValueError('Unknown boundary conditions')
     n_cycle = np.max([int((t_rcr * n_rcr) // time[-1]), n_rcr])
@@ -77,37 +76,33 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
 
     # run 0d simulation
     if 'Rd' in p:
-        p_out = run_rcr(Qfunc, time_0d, p, distal_pressure)
+        p_0d = run_rcr(Qfunc, time_0d, p, distal_pressure)
     elif 'R1' in p:
         _, p_v_time, p_v_pres = cont_func(distal_pressure[:, 0], distal_pressure[:, 1], 3)
-
-        # plt.figure()
-        # plt.plot(p_v_time, p_v_pres)
-        # plt.title("inlet_pressure")
-        # plt.show()
-
-        p_out = run_coronary(Qfunc, time_0d, p, p_v_time, p_v_pres)
+        p_0d = run_coronary(Qfunc, time_0d, p, p_v_time, p_v_pres, time[-1])
     else:
         raise ValueError('Unknown boundary conditions')
 
+    # get last cycle
+    p_out = p_0d[i_last - 1]
+
     # check if solution is periodic
-    delta_p = np.abs(np.mean(p_out[i_last - 1] - p_out[i_prev - 1]) / np.mean(p_out[i_last - 1]))
-    assert delta_p < 1.0e-12, 'solution not periodic. diff=' + str(delta_p)
+    # delta_p = np.abs(np.mean(p_0d[i_last - 1] - p_0d[i_prev - 1]) / np.mean(p_0d[i_last - 1]))
+    delta_p = np.abs(p_out[-1] - p_out[0]) / (np.max(p_out) - np.min(p_out))
+    assert delta_p < 1.0e-9, 'solution not periodic. diff=' + str(delta_p)
 
-    return t_out, p_out[i_last - 1]
-    # return time_0d, p_out
+    return t_out, p_out
 
 
-def check_bc(db, geo, plot_rerun=False):
+def check_bc(db, geo, plot_rerun=True):
     # get post-processing constants
     post = Post()
 
-    # get 3d results
-    f_res_3d = db.get_3d_flow(geo)
-    if not os.path.exists(f_res_3d):
+    # collect results
+    use_bc = False
+    res, time = collect_results_db_3d_3d(db, geo, bc=use_bc)
+    if res is None:
         return
-
-    f_res_3d_rerun = db.get_3d_flow_rerun(geo)
 
     # get boundary conditions
     bc_def, params = db.get_bcs(geo)
@@ -115,12 +110,18 @@ def check_bc(db, geo, plot_rerun=False):
     if bc_def is None:
         return
 
-    # collect results
-    res = defaultdict(lambda: defaultdict(dict))
-    time = {}
-    collect_results('3d', res, time, f_res_3d)
-    if plot_rerun and os.path.exists(f_res_3d_rerun):
-        collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo), t_in=time['3d'][-1])
+    print('Plotting ' + geo)
+
+    if use_bc:
+        rerun_name = '3d_rerun_bc'
+    else:
+        rerun_name = '3d_rerun'
+
+    if plot_rerun and rerun_name + '_cap' in res[0]['flow']:
+        m = rerun_name
+    else:
+        m = '3d'
+    inlet_time = time[m]
 
     # get outlets
     caps = get_caps_db(db, geo)
@@ -147,7 +148,9 @@ def check_bc(db, geo, plot_rerun=False):
         t = bc_type[cp]
 
         # bc inlet flow
-        inlet_flow = res[br]['flow']['3d_int'][-1]
+        inlet_flow = res[br]['flow'][m + '_cap']
+        inlet_pres = res[br]['pressure'][m + '_cap']
+        # pdb.set_trace()
 
         p = {}
         if t == 'rcr':
@@ -159,15 +162,17 @@ def check_bc(db, geo, plot_rerun=False):
             else:
                 rcr_po = 0.0
 
-            t_bc, p_bc = run_0d_cycles(inlet_flow, time['3d'], p, rcr_po)
+            t_bc, p_bc = run_0d_cycles(inlet_flow, inlet_time, p, rcr_po)
         elif t == 'resistance':
             r_res = get_in_model_units(params['sim_units'], 'R', bc['R'])
             r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
 
-            t_bc = time['3d']
+            t_bc = inlet_time
             p_bc = r_po + r_res * inlet_flow
         elif t == 'coronary':
-            continue
+            if not bc_def['coronary']:
+                continue
+
             cor = coronary_sv_to_oned(bc)
             p['R1'] = get_in_model_units(params['sim_units'], 'R', cor['Ra1'])
             p['R2'] = get_in_model_units(params['sim_units'], 'R', cor['Ra2'])
@@ -179,7 +184,7 @@ def check_bc(db, geo, plot_rerun=False):
             p_v_pres = bc_def['coronary'][bc['Pim']][:, 1]
             p_v = get_in_model_units(params['sim_units'], 'P', p_v_pres)
 
-            t_bc, p_bc = run_0d_cycles(inlet_flow, time['3d'], p, np.vstack((p_v_time, p_v)).T)
+            t_bc, p_bc = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_time, p_v)).T)
 
         # plot settings
         ax[j].grid(True)
@@ -190,27 +195,17 @@ def check_bc(db, geo, plot_rerun=False):
             ax[j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
             ax[j].yaxis.set_tick_params(which='both', labelleft=True)
 
-        # plot 3d results
-        for m in ['3d', '3d_rerun']:
-            if m not in time:
-                continue
-            ax[j].plot(time[m], res[br][f][m + '_int'][-1] * post.convert[f], post.styles[m], color=post.colors[m])
-
         # plot bcs
-        ax[j].plot(t_bc, p_bc * post.convert[f], 'r--')
+        ax[j].plot(inlet_time, inlet_pres * post.convert[f], post.styles[m], color=post.colors[m])
+        ax[j].plot(t_bc, p_bc * post.convert[f], 'k--')
 
         # legend
-        l_str = ['OSMSC']
-        if '3d_rerun' in time:
-            l_str += ['RERUN']
-        ax[j].legend(l_str + ['0D ' + t.upper()])
+        ax[j].legend([rerun_name.upper(), '0D ' + t.upper()])
 
         # calculate error
-        p_3d = res[br][f]['3d_int'][-1]
-        diff = interp1d(t_bc, p_bc, fill_value='extrapolate')(time['3d']) - p_3d
-        err = np.mean(np.abs(diff)) / (np.max(p_3d) - np.min(p_3d))
+        diff = interp1d(t_bc, p_bc, fill_value='extrapolate')(inlet_time) - inlet_pres
+        err = np.mean(np.abs(diff)) / (np.max(inlet_pres) - np.min(inlet_pres))
         errors += [err]
-        # print('  err=' + str(err) + ' [mmHg]')
 
         # save to file
         res_bc['time'] = t_bc
@@ -223,7 +218,11 @@ def check_bc(db, geo, plot_rerun=False):
 
     # save figure
     add_image(db, geo, fig)
-    fig.savefig(db.get_bc_comparison_path(geo), bbox_inches='tight')
+    if plot_rerun:
+        f_out = db.get_post_path(geo, 'bcs')
+    else:
+        f_out = db.get_bc_comparison_path(geo)
+    fig.savefig(f_out, bbox_inches='tight')
     plt.close(fig)
 
     # save pressure curves
@@ -270,7 +269,7 @@ def plot(db, geometries):
     ax1.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=100, decimals=2))
     ax1.set_ylim(0.01, 100)
     plt.xticks(np.arange(len(err)), geo, rotation='vertical')
-    plt.ylabel('Max. outlet pressure error to 0D BC')
+    plt.ylabel('Max. outlet pressure error 3D vs. 0D BC')
     fname = os.path.join(db.fpath_gen, 'bc_err.png')
     # plt.legend(list(colors.keys()))
     fig1.savefig(fname, bbox_inches='tight')
@@ -284,5 +283,5 @@ def main(db, geometries):
 if __name__ == '__main__':
     descr = 'Check RCR boundary condition of 3d simulation'
     d, g, _ = input_args(descr)
-    # main(d, g)
-    plot(d, g)
+    main(d, g)
+    # plot(d, g)
