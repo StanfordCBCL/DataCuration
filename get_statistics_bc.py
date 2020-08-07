@@ -35,7 +35,7 @@ def plot_error_spatial(db, geometries):
     fields.remove('area')
 
     # set global plot options
-    fig, ax = plt.subplots(len(fields), len(geometries), figsize=(16, 8), dpi=200, sharey='row', sharex=True)#
+    fig, ax = plt.subplots(len(fields), len(geometries), figsize=(16, 8), dpi=200, sharey=True, sharex=True)#
     plt.rcParams['axes.linewidth'] = 2
 
     # get 1d/3d map
@@ -66,39 +66,40 @@ def plot_error_spatial(db, geometries):
 
                 # get start and end step of each cardiac cycle
                 n_cycle = time['3d_rerun_n_cycle']
-                cycle_range = [[0, 0]]
-                cycles_br = []
+                cycle_range = []
                 for k in range(1, n_cycle + 1):
                     i_cycle = np.where(time['3d_rerun_i_cycle_' + str(k)])[0]
-                    cycle_range += [[i_cycle[0], i_cycle[-1]]]
+                    cycle_range += [i_cycle]
 
                 # calculate cycle error
                 err_br = []
-                for k in range(1, n_cycle + 1):
-                    t_prev = cycle_range[k - 1][-1]
-                    t_this = cycle_range[k][-1]
-                    diff = res_br[t_this] - res_br[t_prev]
+                for k in range(1, n_cycle):
+                    t_prev = cycle_range[k - 1]
+                    t_this = cycle_range[k]
+                    diff = np.mean(res_br[t_this] - res_br[t_prev])
                     err_br += [np.abs(diff / norm)]
                 err += [err_br]
             err = np.array(err).T
 
             # plot data points
-            ax[pos].plot(np.arange(1, len(err) + 1), err, 'o-')
+            ax[pos].plot(np.arange(2, len(err) + 2), err, 'o-')
 
             # print errors
             max_err = np.max(err[-1])
             max_outlet = db.get_cap_names(geo)[list(caps.keys())[np.argmax(err[-1])]]
-            print(geo, f, '{:.2e}'.format(max_err * 100) + '%', 'at outlet ' + max_outlet)
+            print(geo, f[:4], '{:.2e}'.format(max_err * 100) + '%', 'at outlet ' + max_outlet)
 
             # set plot options
             if i == 0:
                 ax[pos].set_title(geo)
             if i == len(fields) - 1:
                 ax[pos].set_xlabel('Cardiac cycle')
+            if j == 0:
+                ax[pos].set_ylabel(f.capitalize() + ' cyclic error')
             ax[pos].grid(True)
-            ax[pos].set_ylabel(f.capitalize() + ' cyclic error')
             ax[pos].ticklabel_format(axis='y')
             ax[pos].set_yscale('log')
+            ax[pos].set_ylim([1.0e-5, 1])
             ax[pos].yaxis.set_major_formatter(mtick.PercentFormatter(1.0, 3))
 
     # lgd = ax[(0, 0)].legend([], bbox_to_anchor=(-0.2, 0), loc='right') #
