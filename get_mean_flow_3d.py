@@ -56,7 +56,7 @@ def get_integral(inp_3d, origin, normal):
     return Integration(inp)
 
 
-def extract_results(fpath_1d, fpath_3d, fpath_out):
+def extract_results(fpath_1d, fpath_3d, fpath_out, only_caps=False):
     """
     Extract 3d results at 1d model nodes (integrate over cross-section)
     Args:
@@ -98,7 +98,7 @@ def extract_results(fpath_1d, fpath_3d, fpath_out):
     for i in range(reader_1d.GetNumberOfPoints()):
         # print progress
         if (i + 1) % (reader_1d.GetNumberOfPoints() // 10) == 0:
-            print('  ' + str((i + 1) * 100 // reader_1d.GetNumberOfPoints()) + '%')
+            print('  ' + str((i + 2) * 100 // reader_1d.GetNumberOfPoints()) + '%')
 
         # check if point is cap
         reader_1d.GetPointCells(i, ids)
@@ -109,6 +109,9 @@ def extract_results(fpath_1d, fpath_3d, fpath_out):
             else:
                 # outlets
                 points[i] -= eps_norm * normals[i]
+        else:
+            if only_caps:
+                continue
 
         # create integration object (slice geometry at point/normal)
         try:
