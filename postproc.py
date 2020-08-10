@@ -52,7 +52,7 @@ def transfer_array(node_trg, node_src, name):
     node_trg.GetPointData().AddArray(out_array)
 
 
-def main(db, geometries):
+def main(db, geometries, get_cent=True):
     """
     Loop all geometries in database
     """
@@ -60,66 +60,72 @@ def main(db, geometries):
         print('Processing ' + geo)
 
         # paths
-        fpath_vol = db.get_res_3d_vol_rerun(geo)
-        fpath_surf = db.get_res_3d_surf_rerun(geo)
         fpath_1d = db.get_centerline_path(geo)
+        fpath_surf = db.get_res_3d_surf_rerun(geo)
+        fpath_vol = db.get_res_3d_vol_rerun(geo)
         fpath_out = db.get_3d_flow_rerun(geo)
         fpath_surf_ref = db.get_surfaces(geo, 'all_exterior')
 
-        # file paths
-        res_fields = ['pressure', 'velocity']
+        if get_cent:
+            # get 3d results
+            extract_results(fpath_1d, fpath_vol, fpath_out, only_caps=True)
+        else:
+            # get only cap results
 
-        surf = read_geo(fpath_surf).GetOutput()
-        surf_ref = read_geo(fpath_surf_ref).GetOutput()
+            # file paths
+            res_fields = ['pressure', 'velocity']
 
-        # transfer surface ids
-        cell_to_point = vtk.vtkCellDataToPointData()
-        cell_to_point.SetInputData(surf_ref)
-        cell_to_point.Update()
+            surf = read_geo(fpath_surf).GetOutput()
+            surf_ref = read_geo(fpath_surf_ref).GetOutput()
 
-        transfer_array(surf, cell_to_point.GetOutput(), 'BC_FaceID')
+            # transfer surface ids
+            cell_to_point = vtk.vtkCellDataToPointData()
+            cell_to_point.SetInputData(surf_ref)
+            cell_to_point.Update()
 
-        surf_cell = vtk.vtkPointDataToCellData()
-        surf_cell.SetInputData(surf)
-        surf_cell.PassPointDataOn()
-        surf_cell.Update()
+            transfer_array(surf, cell_to_point.GetOutput(), 'BC_FaceID')
 
-        # integrate data on boundary surfaces
-        res = integrate_surfaces(surf_cell.GetOutput(), surf_cell.GetOutput().GetCellData(), res_fields)
-        res['flow'] = res['velocity']
-        del res['velocity']
+            surf_cell = vtk.vtkPointDataToCellData()
+            surf_cell.SetInputData(surf)
+            surf_cell.PassPointDataOn()
+            surf_cell.Update()
 
-        # read ordered outlet names from file
-        caps = ['inlet']
-        with open(db.get_centerline_outlet_path(geo)) as file:
-            for line in file:
-                caps += line.splitlines()
+            # integrate data on boundary surfaces
+            res = integrate_surfaces(surf_cell.GetOutput(), surf_cell.GetOutput().GetCellData(), res_fields)
+            res['flow'] = res['velocity']
+            del res['velocity']
 
-        post = Post()
+            # save to file
+            np.save(db.get_3d_flow_rerun_bc(geo), res)
 
-        fields = post.fields
-        fields.remove('area')
+            # read ordered outlet names from file
+            caps = ['inlet']
+            with open(db.get_centerline_outlet_path(geo)) as file:
+                for line in file:
+                    caps += line.splitlines()
 
-        fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
+            post = Post()
 
-        n_max = -1
+            fields = post.fields
+            fields.remove('area')
 
-        for f in fields:
-            legend = caps
-            plt.plot(res['time'][:n_max], res[f][:n_max, :] * post.convert[f])
-            if f == 'flow':
-                plt.plot(res['time'][:n_max], np.sum(res[f][:n_max, :], axis=1) * post.convert[f])
-                legend += ['sum']
-            plt.xlabel('Time step [0.4 ms]')
-            plt.ylabel(f.capitalize() + ' [' + post.units[f] + ']')
-            plt.grid()
-            plt.subplots_adjust(right=0.7)
-            ax.legend(legend, loc=(1.04, 0.5))
-            fig.savefig(os.path.splitext(fpath_surf)[0] + '_' + f + '.png', bbox_inches='tight')
-            plt.cla()
+            fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
 
-        # get 3d results
-        extract_results(fpath_1d, fpath_vol, fpath_out)
+            n_max = -1
+
+            for f in fields:
+                legend = caps
+                plt.plot(res['time'][:n_max], res[f][:n_max, :] * post.convert[f])
+                if f == 'flow':
+                    plt.plot(res['time'][:n_max], np.sum(res[f][:n_max, :], axis=1) * post.convert[f])
+                    legend += ['sum']
+                plt.xlabel('Time step [0.4 ms]')
+                plt.ylabel(f.capitalize() + ' [' + post.units[f] + ']')
+                plt.grid()
+                plt.subplots_adjust(right=0.7)
+                ax.legend(legend, loc=(1.04, 0.5))
+                fig.savefig(os.path.splitext(fpath_surf)[0] + '_' + f + '.png', bbox_inches='tight')
+                plt.cla()
 
 
 if __name__ == '__main__':
