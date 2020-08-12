@@ -504,6 +504,33 @@ class UnsteadyResistance(LPNBlock):
 		self.dfmxcoe = [(0,)*4]*2
 		self.dcmxcoe = [(0,)*4]*2
 
+class UnsteadyResistanceWithDistalPressure(LPNBlock):
+	def __init__(self,Rfunc,Pref_func,connecting_block_list=None,name="NoNameUnsteadyResistanceWithDistalPressure",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "UnsteadyResistanceWithDistalPressure"
+		self.neq = 1
+		self.Rfunc = Rfunc
+		self.Pref_func = Pref_func
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("UnsteadyResistanceWithDistalPressure block can be connected only to two elements")
+
+	def local_eq_coe_def(self,args):
+		# For resistors, the ordering is : (P_in,Q_in)
+		t = args['Time']
+
+		# currently here 7/19/20: since this resistor element with distal pressure is supposed to be a terminal element, so that i dont have to connect a pressureRef block downstream, how many unknowns and equations should this block have? I think its 2 unknowns (P_in,Q_in), but how many equations do i need?
+
+		self.emxcoe = [(0,)*2]
+		self.fmxcoe = [(1.,-1.0*self.Rfunc(t))]
+		self.cveccoe = [-1.0*self.Pref_func(t)]
+
+		self.demxcoe = [(0,)*2]
+		self.dfmxcoe = [(0,)*2]
+		self.dcmxcoe = [(0,)*2]
+
 # -- Pressure reference
 class PressureRef(LPNBlock):
 	def __init__(self,Pref,connecting_block_list=None,name="NoNamePressureRef",flow_directions=None):
@@ -528,16 +555,16 @@ class PressureRef(LPNBlock):
 
 # -- Unsteady P reference
 class UnsteadyPressureRef(LPNBlock):
-	def __init__(self,Pfunc,connecting_block_list=None,name="NoNamePressureRef",flow_directions=None):
+	def __init__(self,Pfunc,connecting_block_list=None,name="NoNameUnsteadyPressureRef",flow_directions=None):
 
 		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
-		self.type = "PressureRef"
+		self.type = "UnsteadyPressureRef"
 		self.neq = 1
 		self.Pfunc=Pfunc
 
 	def check_block_consistency(self):
 		if len(connecting_block_list) != 1:
-			raise Exception("PressureRef block can be connected only to one element")
+			raise Exception("UnsteadyPressureRef block can be connected only to one element")
 
 	def local_eq_coe_def(self,args):
 		t = args['Time']
@@ -554,16 +581,16 @@ class UnsteadyPressureRef(LPNBlock):
 
 # -- Flow reference
 class UnsteadyFlowRef(LPNBlock):
-	def __init__(self,Qfunc,connecting_block_list=None,name="NoNameFlowRef",flow_directions=None):
+	def __init__(self,Qfunc,connecting_block_list=None,name="NoNameUnsteadyFlowRef",flow_directions=None):
 
 		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
-		self.type = "FlowRef"
+		self.type = "UnsteadyFlowRef"
 		self.neq = 1
 		self.Qfunc=Qfunc
 
 	def check_block_consistency(self):
 		if len(connecting_block_list) != 1:
-			raise Exception("FlowRef block can be connected only to one element")
+			raise Exception("UnsteadyFlowRef block can be connected only to one element")
 
 	def local_eq_coe_def(self,args):
 		t = args['Time']
@@ -728,14 +755,44 @@ class UnsteadyRCRBlock(LPNBlock):
 		self.dfmxcoe = [(0,)*5]*3
 		self.dcmxcoe = [(0,)*5]*3
 
-# -- Open loop coronary block - RCRCR - pressure imposed on the second capacitor
 
+# -- Unsteady RCR - time-varying RCR values
+# Formulation includes additional variable : internal pressure proximal to capacitance.
+class UnsteadyRCRBlockWithDistalPressure(LPNBlock):
+	def __init__(self,Rp_func,C_func,Rd_func,Pref_func,connecting_block_list=None,name="NoNameUnsteadyRCRBlockWithDistalPressure",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "UnsteadyRCRBlockWithDistalPressure"
+		self.neq = 2
+		self.num_block_vars = 1
+		self.Rp_func = Rp_func
+		self.C_func = C_func
+		self.Rd_func = Rd_func
+		self.Pref_func = Pref_func
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("UnsteadyRCRBlockWithDistalPressure block can be connected only to two elements")
+
+	def local_eq_coe_def(self,args):
+		# unknowns = [P_in, Q_in, internal_var (Pressure at the intersection of the Rp, Rd, and C elements)]
+
+		t = args['Time']
+		self.emxcoe = [(0,0,0),      (0,0,-1.0*self.Rd_func(t)*self.C_func(t))]
+		self.fmxcoe = [(1.,-self.Rp_func(t),-1.), (0.0, self.Rd_func(t),-1.0)]
+		self.cveccoe = [0,self.Pref_func(t)]
+
+		self.demxcoe = [(0,)*3]*2
+		self.dfmxcoe = [(0,)*3]*2
+		self.dcmxcoe = [(0,)*3]*2
+
+# -- Open loop coronary block - RCRCR - pressure imposed on the second capacitor
 class OpenLoopCoronaryBlock(LPNBlock):
 	"Publication reference: Kim, H. J. et al. Patient-specific modeling of blood flow and pressure in human coronary arteries. Annals of Biomedical Engineering 38, 3195–3209 (2010)."
 
 	"open-loop coronary BC = RCRCR BC"
 
-	def __init__(self,R1,C1,R2,C2,R3,dPvdt_f,connecting_block_list=None,name="NoNameCoronary",flow_directions=None):
+	def __init__(self,R1,C1,R2,C2,R3,dPvdt_f,cardiac_cycle_period, connecting_block_list=None,name="NoNameCoronary",flow_directions=None):
 
 		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
 		self.type = "Coronary"
@@ -747,6 +804,7 @@ class OpenLoopCoronaryBlock(LPNBlock):
 		self.C2 = C2
 		self.R3 = R3
 		self.dPvdt_f = dPvdt_f
+		self.cardiac_cycle_period = cardiac_cycle_period
 # Provide a [Nx2] array for the time-derivative of intramyocardial pressure. dPvdt_f[:,0] is the time info. dPvdt_f[:,1] is the pressure deriv. values.
 
 	def check_block_consistency(self):
@@ -757,7 +815,7 @@ class OpenLoopCoronaryBlock(LPNBlock):
 	def dPvdt(self,dPvdt_f,t):
 		tt=dPvdt_f[:,0]
 		dPvdt_t = dPvdt_f[:,1]
-		ti, td = divmod(t,1)
+		ti, td = divmod(t, self.cardiac_cycle_period)
 		dPv = np.interp(td, tt, dPvdt_t)
 		return dPv
 # dPvdt should return a time derivative of intramyocardial pressurea at time t. Here this example assumes a heart cycle of 1.0. User may implement modified funtion for different heart cycle.
@@ -773,8 +831,6 @@ class OpenLoopCoronaryBlock(LPNBlock):
 		# and P_in is the pressure at the inlet of the first resistor and P_out is the the pressure ath the outlet of the third resistor
 		# Note that the first capacitor is attached to ground but the second capacitor is attached to the time-varying  intramyocardial pressure
 
-		# currently here 6/26/20: HOW DOES Pv get used in this BC, because Pv is not the intramyocadial pressure? maybe see aekaansh 0d documentation to see if he talked about this. actually, I think Pv is the intramyocardial pressure? 		6/26/20: answer: jongmin said that he applies Pv as a separate PressureRef block downstrean of the coronary BC block, just like how i apply a ground PressureRef block downstrean of normal resistance and RCR blocks
-
 		self.emxcoe = [(0,0,0,0,0), (-self.C1,self.C1*self.R1,0,0,0),   (-self.C2,self.C2*self.R1,0,0,self.C2*self.R2)]
 		self.fmxcoe = [(1.0,-self.R1,-1.0,-self.R3,-self.R2), (0,1.0,0,0,-1.0),      (0,0,0,-1.0,1.0)]
 		self.cveccoe = [0,0,self.C2*dPv]
@@ -782,6 +838,61 @@ class OpenLoopCoronaryBlock(LPNBlock):
 		self.demxcoe = [(0,)*5]*3
 		self.dfmxcoe = [(0,)*5]*3
 		self.dcmxcoe = [(0,)*5]*3
+
+class OpenLoopCoronaryWithDistalPressureBlock(LPNBlock):
+	"Publication reference: Kim, H. J. et al. Patient-specific modeling of blood flow and pressure in human coronary arteries. Annals of Biomedical Engineering 38, 3195–3209 (2010)."
+
+	"open-loop coronary BC = RCRCR BC"
+
+	def __init__(self,R1,C1,R2,C2,R3,dPvdt_f,Pv,cardiac_cycle_period,connecting_block_list=None,name="NoNameCoronary",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "OpenLoopCoronaryWithDistalPressureBlock"
+		self.neq = 2
+		self.num_block_vars = 1
+		self.R1 = R1
+		self.C1 = C1
+		self.R2 = R2
+		self.C2 = C2
+		self.R3 = R3
+		self.dPvdt_f = dPvdt_f
+		self.Pv = Pv
+		self.cardiac_cycle_period = cardiac_cycle_period
+# Provide a [Nx2] array for the time-derivative of intramyocardial pressure. dPvdt_f[:,0] is the time info. dPvdt_f[:,1] is the pressure deriv. values.
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("OpenLoopCoronaryWithDistalPressureBlock can be connected only to one elements")
+# The Open Loop Coronary block needs to attach a downstream pressure reference block.
+
+	def dPvdt(self,dPvdt_f,t):
+		tt=dPvdt_f[:,0]
+		dPvdt_t = dPvdt_f[:,1]
+		ti, td = divmod(t, self.cardiac_cycle_period)
+		dPv = np.interp(td, tt, dPvdt_t)
+		return dPv
+# dPvdt should return a time derivative of intramyocardial pressurea at time t. Here this example assumes a heart cycle of 1.0. User may implement modified funtion for different heart cycle.
+
+	def local_eq_coe_def(self,args):
+
+		# unknowns = [P_in, Q_in, flow rate through the second resistor in the RCRCR block]
+
+		t = args['Time']
+		dPv = self.dPvdt(self.dPvdt_f,t)
+
+		# For this open-loop coronary BC, the ordering of solution unknowns is : (P_in, Q_in, P_out, Q_out, Q_internal)
+		# where Q_internal is the flow through the second resistor in the RCRCR BC
+		# and Q_out is the flow the third resistor, and Q_in is the flow through the first resistor
+		# and P_in is the pressure at the inlet of the first resistor and P_out is the the pressure ath the outlet of the third resistor
+		# Note that the first capacitor is attached to ground but the second capacitor is attached to the time-varying  intramyocardial pressure
+
+		self.emxcoe = [(-1.0*self.C1, self.R1*self.C1, 0), (self.R3*self.C2, -1.0*self.R3*self.C2*self.R1, -1.0*self.R3*self.C2*self.R2)]
+		self.fmxcoe = [(0, 1.0, -1.0), (1.0, -self.R1, -1.0*(self.R3 + self.R2))]
+		self.cveccoe = [0, -1.0*self.R3*self.C2*dPv - self.Pv]
+
+		self.demxcoe = [(0,)*3]*self.neq
+		self.dfmxcoe = [(0,)*3]*self.neq
+		self.dcmxcoe = [(0,)*3]*self.neq
 
 # -- Time Varying Capacitance
 class TimeDependentCapacitance(LPNBlock):
@@ -1505,3 +1616,134 @@ def gen_alpha_dae_integrator_NR(y,ydot,t,block_list,args,dt,rho,nit=16):
 	args['Time'] = t+dt
 
 	return curr_y,curr_ydot
+
+################################################################################################
+################################################################################################
+################################ SPECIAL ELEMENT CLASSES #######################################
+################################################################################################
+################################################################################################
+
+class UnsteadyResistanceWithDistalPressure_special(LPNBlock):
+	def __init__(self,Rfunc,Pref_func,connecting_block_list=None,name="NoNameUnsteadyResistanceWithDistalPressure_special",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "UnsteadyResistanceWithDistalPressure_special"
+		self.neq = 1
+		self.Rfunc = Rfunc
+		self.Pref_func = Pref_func
+
+
+		# input("UnsteadyResistanceWithDistalPressure_special - click to continue")
+
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("UnsteadyResistanceWithDistalPressure_special block can be connected only to two elements")
+
+	def local_eq_coe_def(self,args):
+		# For resistors, the ordering is : (P_in,Q_in)
+		t = args['Time']
+
+		# currently here 7/19/20: since this resistor element with distal pressure is supposed to be a terminal element, so that i dont have to connect a pressureRef block downstream, how many unknowns and equations should this block have? I think its 2 unknowns (P_in,Q_in), but how many equations do i need?
+
+		self.emxcoe = [(0,)*2]
+		self.fmxcoe = [(1.,-1.0*self.Rfunc(t))]
+		self.cveccoe = [-1.0*self.Pref_func(t)]
+
+		self.demxcoe = [(0,)*2]
+		self.dfmxcoe = [(0,)*2]
+		self.dcmxcoe = [(0,)*2]
+
+# -- Resistance
+class UnsteadyResistance_special(LPNBlock):
+	def __init__(self,Rfunc,connecting_block_list=None,name="NoNameUnsteadyResistance_special",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "UnsteadyResistance_special"
+		self.Rfunc = Rfunc
+
+		# input("UnsteadyResistance_special - click to continue")
+
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 2:
+			raise Exception("UnsteadyResistance_special block can be connected only to two elements")
+
+	def local_eq_coe_def(self,args):
+		# For resistors, the ordering is : (P_in,Q_in,P_out,Q_out)
+		t = args['Time']
+
+		self.emxcoe = [(0,)*4]*2
+		self.fmxcoe = [(1.,-1.0*self.Rfunc(t),-1.,0),(0,1.,0,-1.)]
+		self.cveccoe = [0]*2
+
+		self.demxcoe = [(0,)*4]*2
+		self.dfmxcoe = [(0,)*4]*2
+		self.dcmxcoe = [(0,)*4]*2
+
+class UnsteadyFlowRef_special(LPNBlock):
+	def __init__(self,Qfunc,connecting_block_list=None,name="NoNameUnsteadyFlowRef_special",flow_directions=None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "UnsteadyFlowRef_special"
+		self.neq = 1
+		self.Qfunc=Qfunc
+
+		# input("UnsteadyFlowRef_special - click to continue")
+
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("UnsteadyFlowRef_special block can be connected only to one element")
+
+	def local_eq_coe_def(self,args):
+		t = args['Time']
+		self.emxcoe = [(0,0)]
+		self.fmxcoe = [(0,1.)]
+		self.cveccoe = [-1.0*self.Qfunc(t)]
+
+		self.demxcoe = [(0,)]
+		self.dfmxcoe = [(0,)]
+		self.dcmxcoe = [(0,)]
+
+class Junction_special(LPNBlock):
+	def __init__(self,temp_parameter,connecting_block_list=None,name="NoNameJunction_special",flow_directions=None):
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "Junction_special"
+		self.neq = self.num_connections
+		self.temp_parameter = temp_parameter
+
+		# input("Junction_special - click to continue")
+
+
+	def add_connecting_block(self,block,direction):
+		self.connecting_block_list.append(block)
+		self.num_connections = len(self.connecting_block_list)
+		self.neq = self.num_connections
+		self.flow_directions.append(direction)
+		# print self.name
+
+	def local_eq_coe_def(self,args):
+
+		# Number of variables per tuple = 2*num_connections
+		# Number of equations = num_connections-1 Pressure equations, 1 flow equation
+		# Format : P1,Q1,P2,Q2,P3,Q3, .., Pn,Qm
+
+		# print("\ntemp_parameter = ", self.temp_parameter)
+
+		self.emxcoe = [(0,)*(2*self.num_connections)]*(self.num_connections)
+
+		self.fmxcoe = [ (1.,)+(0,)*(2*i+1) + (-1,) + (0,)*(2*self.num_connections-2*i-3) for i in range(self.num_connections-1) ]
+
+		tmp = (0,)
+		for d in self.flow_directions[:-1]:
+			tmp+=(d,)
+			tmp+=(0,)
+
+		tmp += (self.flow_directions[-1],)
+		self.fmxcoe.append(tmp)
+		self.cveccoe = [0]*self.num_connections
+
+		self.demxcoe = [(0,)*(2*self.num_connections)]*(self.num_connections)
+		self.dfmxcoe = [(0,)*(2*self.num_connections)]*(self.num_connections)
+		self.dcmxcoe = [(0,)*(2*self.num_connections)]*(self.num_connections)
