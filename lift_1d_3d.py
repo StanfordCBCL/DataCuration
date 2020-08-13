@@ -11,7 +11,9 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 from lift_laplace import StiffnessMatrix
+from get_database import Database, SimVascular, Post, input_args
 from vtk_functions import read_geo, write_geo, ClosestPoints, cell_connectivity
+from simulation_io import map_1d_to_centerline
 
 
 def project_1d_3d(f_1d, f_vol, f_out, field):
@@ -39,17 +41,17 @@ def project_1d_3d(f_1d, f_vol, f_out, field):
     arr.SetName('imprint')
     vol.GetPointData().AddArray(arr)
 
-    # get 1d pressure field
-    pressure_1d = v2n(oned.GetPointData().GetArray(field))
+    # get 1d field field
+    field_1d = v2n(oned.GetPointData().GetArray(field))
 
     # create laplace FEM stiffness matrix
     laplace = StiffnessMatrix(cells['tetra'], points_vol)
 
     # solve laplace equation (map desired field from 1d to 3d)
-    pressure = laplace.HarmonicLift(ids_vol, pressure_1d[ids_cent])
+    field_3d = laplace.HarmonicLift(ids_vol, field_1d[ids_cent])
 
     # create output array
-    arr = n2v(pressure)
+    arr = n2v(field_3d)
     arr.SetName(field)
     vol.GetPointData().AddArray(arr)
 
@@ -57,13 +59,21 @@ def project_1d_3d(f_1d, f_vol, f_out, field):
     write_geo(f_out, vol)
 
 
-def main():
-    f_vol = '/home/pfaller/work/osmsc/initial_from_1d/projection_input/0003_0001.vtu'
-    f_1d = '/home/pfaller/work/osmsc/initial_from_1d/projection_input/0003_0001_1d.vtp'
-    f_out = '/home/pfaller/work/osmsc/initial_from_1d/projection_output_lift/0003_0001.vtu'
+def main(db, geometries):
     field = 'pressure'
-    project_1d_3d(f_1d, f_vol, f_out, field)
+    for geo in geometries:
+        f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
+        f_1d = db.get_1d_flow_path_vtp(geo)
+        f_out = db.get_initial_conditions_pressure(geo)
+
+        if not os.path.exists(f_1d):
+            continue
+
+        print('Running geometry ' + geo)
+        project_1d_3d(f_1d, f_vol, f_out, field)
 
 
 if __name__ == '__main__':
-    main()
+    descr = 'Get 3D-3D statistics'
+    d, g, _ = input_args(descr)
+    main(d, g)
