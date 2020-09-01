@@ -20,7 +20,6 @@ from get_database import input_args
 from vtk_functions import read_geo, write_geo, collect_arrays, get_all_arrays, ClosestPoints
 from get_bc_integrals import get_res_names
 from vtk_to_xdmf import write_xdmf
-from postproc import map_meshes
 
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
@@ -30,6 +29,15 @@ sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
 # import sv_1d_simulation as oned
 # from mesh import get_connectivity
+
+
+def map_meshes(nd_id_src, nd_id_trg):
+    """
+    Map source mesh to target mesh
+    """
+    index = np.argsort(nd_id_src)
+    search = np.searchsorted(nd_id_src[index], nd_id_trg)
+    return index[search]
 
 
 def read_results_1d(res_dir, params_file=None):
@@ -73,10 +81,9 @@ def read_results_1d(res_dir, params_file=None):
     return results_1d
 
 
-def write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_cent, f_out, t_in):
+def write_results_1d(f_res_1d, f_geo_1d, f_cent, f_out, t_in):
     # read results
     res_1d = get_dict(f_res_1d)
-    res_3d = load_results_3d(f_res_3d)
 
     # read geometry
     geo_cent = read_geo(f_cent).GetOutput()
@@ -84,16 +91,24 @@ def write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_cent, f_out, t_in):
 
     # get time information
     time = {}
-    get_time('3d', res_3d, time, t_in=t_in)
     get_time('1d', res_1d, time, t_in=t_in)
 
     # write results to centerline
-    arrays = map_1d_to_centerline(geo_cent, geo_1d, res_1d, time)
+    i_last = np.where(time['1d_i_cycle_' + str(time['1d_n_cycle'])])[0][-1]
+    res_last = defaultdict(lambda: defaultdict(dict))
+    del res_1d['params']
+    for f in res_1d.keys():
+        for br in res_1d[f].keys():
+            for seg in res_1d[f][br].keys():
+                res_last[f][br][seg] = res_1d[f][br][seg][:, i_last]
+    del res_1d
+    arrays = map_1d_to_centerline(geo_cent, geo_1d, res_last, time)
 
     if '.xdmf' in f_out:
         write_xdmf(geo_cent, arrays, f_out)
     else:
-        for f, a in arrays[str(time['1d'][-1])]['point'].items():
+        # export last time step (= initial conditions)
+        for f, a in arrays[0]['point'].items():
             out_array = n2v(a)
             out_array.SetName(f)
             geo_cent.GetPointData().AddArray(out_array)
@@ -117,10 +132,15 @@ def map_1d_to_centerline(geo_cent, geo_1d, res_1d, time):
     fields_res_1d = ['flow', 'pressure', 'area', 'wss', 'Re']
 
     # time steps to export
-    i_export = np.where(time['1d_last_cycle_i'])[0]
+    i_export = np.where(time['1d_last_cycle_i'])[-1]
 
     # number of time steps
-    n_t = res_1d[fields_res_1d[0]][0][0].shape[1]
+    dim = res_1d[fields_res_1d[0]][0][0].shape
+    if len(dim) == 1:
+        n_t = 1
+        i_export = [0]
+    else:
+        n_t = dim[1]
 
     # centerline points
     points = v2n(geo_cent.GetPoints().GetData())
@@ -149,7 +169,7 @@ def map_1d_to_centerline(geo_cent, geo_1d, res_1d, time):
             f_cent = interp1d(path_1d_res, f_res.T, fill_value='extrapolate')(path_cent).T
 
             # store results of this path
-            array_f[arrays_cent['BranchId'] == br] = f_cent
+            array_f[arrays_cent['BranchId'] == br] = np.expand_dims(f_cent, axis=1)
 
             # add upstream part of branch within junction
             if br == 0:
@@ -189,8 +209,11 @@ def map_1d_to_centerline(geo_cent, geo_1d, res_1d, time):
         array_f[n_outlet > 0] = (array_f[n_outlet > 0].T / n_outlet[n_outlet > 0]).T
 
         # assemble time steps
-        for i, t in enumerate(i_export):
-            arrays[str(time['1d'][i])]['point'][f] = array_f[:, t]
+        if len(i_export) == 1:
+            arrays[0]['point'][f] = array_f
+        else:
+            for i, t in enumerate(i_export):
+                arrays[str(time['1d'][i])]['point'][f] = array_f[:, t]
 
     return arrays
 
@@ -255,9 +278,9 @@ def get_time(model, res, time, dt_3d=0, t_in=0):
         time[model + '_all'] = np.arange(0, res['pressure'][0][0].shape[1] + 1)[1:] * dt
 
     # time steps for last cycle
-    if '3d' in time and (model == '1d' or '3d_rerun' in model):
+    if model == '1d' or '3d_rerun' in model:
         # how many full cycles where completed?
-        n_cycle = max(1, int(time[model + '_all'][-1] // time['3d'][-1]))
+        n_cycle = max(1, int(time[model + '_all'][-1] // t_in))
         time[model + '_n_cycle'] = n_cycle
 
         # first and last time step in cycle
@@ -598,14 +621,13 @@ def collect_results_db_3d_3d_spatial(db, geo):
 def export_1d_xmdf(db, geo):
     f_geo_1d = db.get_1d_geo(geo)
     f_res_1d = db.get_1d_flow_path(geo)
-    f_res_3d = db.get_3d_flow(geo)
     f_geo = db.get_centerline_path(geo)
     # f_out = db.get_1d_flow_path_xdmf(geo)
     f_out = db.get_1d_flow_path_vtp(geo)
 
     time_inflow, _ = db.get_inflow_smooth(geo)
 
-    write_results_1d(f_res_1d, f_res_3d, f_geo_1d, f_geo, f_out, t_in=time_inflow[-1])
+    write_results_1d(f_res_1d, f_geo_1d, f_geo, f_out, t_in=time_inflow[-1])
 
 
 def main(db, geometries):
