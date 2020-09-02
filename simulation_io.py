@@ -40,6 +40,45 @@ def map_meshes(nd_id_src, nd_id_trg):
     return index[search]
 
 
+def read_results_0d(fpath):
+    # requested output fields
+    names_0d = {'flow': 'Q',
+                'pressure': 'P',
+                'wss': 'tau'}
+
+    # read results
+    res = get_dict(fpath)
+
+    results_0d = {'time': res['time']}
+    for field in names_0d.keys():
+        results_0d[field] = defaultdict(dict)
+
+        # loop 0d segments
+        for seg in res[field].keys():
+            ids = seg.split('_')
+            assert ids[0] == names_0d[field], 'Tag is ' + ids[0] + ', expected ' + names_0d[field]
+
+            # sort according to branch and branch inlet/outlet
+            if ids[1][0] == 'V':
+                # branch outlet
+                path = 1
+                branch = int(ids[1][1])
+            elif ids[2][0] == 'V':
+                # branch inlet
+                path = 0
+                branch = int(ids[2][1])
+            else:
+                if ids[-1] == 'V0':
+                    # inlet branch inlet
+                    path = 0
+                    branch = 0
+                else:
+                    raise ValueError('Can\'t identify tag ' + seg)
+            results_0d[field][branch][path] = res[field][seg]
+
+    return results_0d
+
+
 def read_results_1d(res_dir, params_file=None):
     """
     Read results from oneDSolver and store in dictionary
@@ -637,7 +676,9 @@ def main(db, geometries):
         if not os.path.exists(db.get_1d_flow_path(geo)):
             continue
 
-        export_1d_xmdf(db, geo)
+        # export_1d_xmdf(db, geo)
+        read_results_0d(db.get_0d_flow_path(geo))
+
 
 
 if __name__ == '__main__':
