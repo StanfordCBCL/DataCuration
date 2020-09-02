@@ -120,6 +120,19 @@ def read_results_1d(res_dir, params_file=None):
     return results_1d
 
 
+def write_results_0d(f_res, f_geo, f_out):
+    res = read_results_0d(f_res)
+    cent = read_geo(f_geo).GetOutput()
+    arrays = map_0d_to_centerline(cent, res)
+
+    # export last time step (= initial conditions)
+    for f, a in arrays[0]['point'].items():
+        out_array = n2v(a)
+        out_array.SetName(f)
+        cent.GetPointData().AddArray(out_array)
+    write_geo(f_out, cent)
+
+
 def write_results_1d(f_res_1d, f_geo_1d, f_cent, f_out, t_in):
     # read results
     res_1d = get_dict(f_res_1d)
@@ -152,6 +165,43 @@ def write_results_1d(f_res_1d, f_geo_1d, f_cent, f_out, t_in):
             out_array.SetName(f)
             geo_cent.GetPointData().AddArray(out_array)
         write_geo(f_out, geo_cent)
+
+
+def map_0d_to_centerline(geo_cent, res, only_last=True):
+    # assemble output dict
+    rec_dd = lambda: defaultdict(rec_dd)
+    arrays = rec_dd()
+
+    # get centerline arrays
+    arrays_cent, _ = get_all_arrays(geo_cent)
+
+    # fields to export
+    fields_res_1d = ['flow', 'pressure', 'wss']
+    time = res['time']
+    n_t = len(time)
+
+    # loop all result fields
+    for f in fields_res_1d:
+        array_f = np.zeros((arrays_cent['Path'].shape[0], n_t))
+        for br in res[f].keys():
+            # get centerline path
+            path_cent = arrays_cent['Path'][arrays_cent['BranchId'] == br]
+            path_cent /= path_cent[-1]
+
+            # linearly interpolate results along centerline
+            f_cent = interp1d([0, 1], np.vstack((res[f][br][0], res[f][br][1])).T)(path_cent).T
+
+            # store in global array
+            array_f[arrays_cent['BranchId'] == br] = f_cent
+
+        # assemble time steps
+        if only_last:
+            arrays[0]['point'][f] = array_f[:, 0]
+        else:
+            for i, t in enumerate(time):
+                arrays[str(t)]['point'][f] = array_f[:, i]
+
+    return arrays
 
 
 def map_1d_to_centerline(geo_cent, geo_1d, res_1d, time):
@@ -455,10 +505,6 @@ def res_1d_to_path(path, res):
     return np.array(path_1d), np.array(int_1d)
 
 
-def res_1d_to_jc():
-    return
-
-
 def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, t_in=0, caps=None):
     # read results
     # todo: store 1d results in vtp as well
@@ -669,16 +715,22 @@ def export_1d_xmdf(db, geo):
     write_results_1d(f_res_1d, f_geo_1d, f_geo, f_out, t_in=time_inflow[-1])
 
 
+def export_0d_vtp(db, geo):
+    f_res = db.get_0d_flow_path(geo)
+    f_geo = db.get_centerline_path(geo)
+    f_out = db.get_0d_flow_path_vtp(geo)
+    write_results_0d(f_res, f_geo, f_out)
+
+
 def main(db, geometries):
     for geo in geometries:
         print('Processing ' + geo)
 
-        if not os.path.exists(db.get_1d_flow_path(geo)):
+        if not os.path.exists(db.get_0d_flow_path(geo)):
             continue
 
         # export_1d_xmdf(db, geo)
-        read_results_0d(db.get_0d_flow_path(geo))
-
+        export_0d_vtp(db, geo)
 
 
 if __name__ == '__main__':
