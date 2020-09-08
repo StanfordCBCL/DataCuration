@@ -25,7 +25,62 @@ def jacobian_positive(points, tets):
     return np.sum(np.linalg.det(jac) <= 0.0) == 0
 
 
-def get_vol(db, geo, ini_from_1d=True):
+def get_last_timestep(res, field):
+    """
+    Return the last time step of a field
+    """
+    return [k for k in sorted(res.keys()) if field in k][-1]
+
+
+def get_last_result(fpath):
+    """
+    Return the results of the last time step for pressure and velocity
+    """
+    if not os.path.exists(fpath):
+        raise ValueError('No results found in ' + fpath)
+    geo = read_geo(fpath).GetOutput()
+    res = collect_arrays(geo.GetPointData())
+    return res[get_last_timestep(res, 'pressure')], res[get_last_timestep(res, 'velocity')]
+
+
+def get_initial_conditions(db, geo, ini_pres='1d', ini_velo='steady'):
+    """
+    Generate initial conditions from database for pressure and velocity
+    """
+    # load steady state results
+    if ini_pres == 'steady' or ini_velo == 'steady':
+        p0_steady, u0_steady = get_last_result(db.get_initial_conditions_steady(geo))
+
+    # load osmsc results
+    if ini_pres == 'osmsc' or ini_velo == 'osmsc':
+        p0_osmsc, u0_osmsc = get_last_result(db.get_volume(geo))
+
+    # initial pressure
+    if ini_pres == 'zero':
+        p0 = np.zeros(vol.GetNumberOfPoints())
+    elif ini_pres == '1d':
+        p0 = v2n(read_geo(db.get_initial_conditions_pressure(geo)).GetOutput().GetPointData().GetArray('pressure'))
+    elif ini_velo == 'steady':
+        p0 = p0_steady
+    elif ini_pres == 'osmsc':
+        p0 = p0_osmsc
+    else:
+        raise ValueError('Unknown pressure initialization ' + ini_pres)
+
+    # initial velocity
+    if ini_velo == 'zero':
+        u0 = 0.0001 * np.ones((vol.GetNumberOfPoints(), 3))
+    elif ini_velo == 'steady':
+        u0 = u0_steady
+    elif ini_velo == 'osmsc':
+        u0 = u0_osmsc
+    else:
+        raise ValueError('Unknown velocity initialization ' + ini_velo)
+
+    return p0, u0
+
+
+def get_vol(db, geo):
     """
     Generate volume mesh for SimVascular: remove all unused arrays and reoder tet nodes
     """
@@ -65,21 +120,8 @@ def get_vol(db, geo, ini_from_1d=True):
     mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
     meshio.write(f_out, mesh)
 
-    # get results
-    res = collect_arrays(vol.GetPointData())
-
-    # get last time step
-    times = np.unique([float(k.split('_')[1]) for k in res.keys() if '_' in k])
-    t_last = str(times[-1])
-
-    # add initial conditions
-    for k in res.keys():
-        if t_last in k:
-            if 'ini_from_1d' and 'pressure' in k:
-                geo_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput()
-                point_data[k] = v2n(geo_1d.GetPointData().GetArray('pressure'))
-            else:
-                point_data[k] = res[k]
+    # get initial conditions
+    point_data['pressure'], point_data['velocity'] = get_initial_conditions(db, geo)
 
     # write initial conditions to file
     mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
