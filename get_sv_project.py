@@ -14,13 +14,13 @@ from get_bcs import get_in_model_units
 from inflow import optimize_inflow
 
 
-def get_sv_opt(db, geo):
+def get_sv_opt(db, geo, mode=''):
     # get boundary conditions
     bc_def, params = db.get_bcs(geo)
-    bc_type, err = db.get_bc_type(geo)
+    # bc_type, err = db.get_bc_type(geo)
 
     # number of cycles
-    n_cycle = 10
+    n_cycle = estimate_n_cycle(db, geo)
 
     # number of time steps
     numstep = int(float(params['sim_steps_per_cycle']))
@@ -34,17 +34,39 @@ def get_sv_opt(db, geo):
     # read inflow conditions
     time, inflow = db.get_inflow_smooth(geo)
 
-    inflow_str = ''
-    for j, (t, i) in enumerate(zip(time, inflow)):
-        inflow_str += str(t) + ' ' + str(i)
-        if j < time.shape[0] - 1:
-            inflow_str += '&#x0A;'
+    if mode == '':
+        pass
+    elif mode == 'steady':
+        n_cycle = 10
+        inflow = np.mean(inflow) * np.ones(len(time))
+    elif mode == 'steady0':
+        n_cycle = 10
+        inflow = inflow[0] * np.ones(len(time))
+    elif mode == 'post':
+        print(nt_out)
+        exit(1)
+    else:
+        raise ValueError('Unknown mode ' + mode)
 
-    # number of points
-    n_point = time.shape[0] // 2
+    # create inflow string
+    inflow_str = array_to_sv(np.vstack((time, inflow)).T)
 
     # number of fourier modes
-    n_fourier = n_point - 1
+    n_t = time.shape[0]
+    if n_t % 2 == 0:
+        n_fourier = int(n_t / 2 + 1)
+    else:
+        n_fourier = int((n_t + 1) / 2)
+
+    # number of points
+    n_point = len(time)
+
+    # get inflow type
+    inflow_type = bc_def['bc']['inflow']['type']
+    if inflow_type == 'womersley':
+        inflow_type = 'plug'
+    if inflow_type not in ['parabolic', 'plug', 'womersley']:
+        raise ValueError('unknown inflow type ' + inflow_type)
 
     # set svsolver options
     opt = {'density': '1.06',
@@ -52,7 +74,9 @@ def get_sv_opt(db, geo):
            'backflow': '0.2',
            'advection': 'Convective',
            'inflow': 'inflow.flow',
+           'inflow_data': np.vstack((time, inflow)).T,
            'inflow_str': inflow_str,
+           'inflow_type': inflow_type,
            'fourier_modes': str(n_fourier),
            'fourier_period': str(time[-1]),
            'fourier_points': str(n_point),
@@ -62,8 +86,8 @@ def get_sv_opt(db, geo):
            'min_iter': '3',
            'num_krylov': '300',
            'num_solve': '1',
-           'num_time': str(int(n_cycle * numstep + 100)),
-           'num_restart': str(nt_out),
+           'num_time': str(int(n_cycle * numstep + nt_out)),
+           'num_restart': '1',#str(nt_out),
            'bool_surf_stress': 'True',
            'coupling': 'Implicit',
            'print_avg_sol': 'True',
@@ -86,6 +110,67 @@ def get_sv_opt(db, geo):
            'mesh_inflow': os.path.join('mesh-complete', 'mesh-surfaces', 'inflow.vtp'),
            'mesh_walls': os.path.join('mesh-complete', 'walls_combined.vtp')}
     return opt
+
+
+def estimate_n_cycle(db, geo, n_tau=5):
+    # time for one cycle
+    time, _ = db.get_inflow_smooth(geo)
+    t_cycle = time[-1]
+
+    # get RC time constant from boundary conditions
+    bc_def, params = db.get_bcs(geo)
+    tau_bc = []
+    for bc in bc_def['bc'].values():
+        if 'Rd' in bc:
+            tau_bc += [bc['Rd'] * bc['C'] / t_cycle]
+
+    # estimate number of cycles to reach convergence from largest RC constant
+    if len(tau_bc) == 0:
+        return 10
+    else:
+        return int(n_tau * (np.max(tau_bc)) + 1.0)
+
+
+def array_to_sv(array):
+    sv_str = ''
+    for j, (t, i) in enumerate(array):
+        sv_str += str(t) + ' ' + str(i)
+        if j < array.shape[0] - 1:
+            sv_str += '&#x0A;'
+    return sv_str
+
+
+def coronary_sv_to_oned(bc):
+    """
+    Convert format of coronary boundary condition parameters from svSimVascular to svOneDSolver
+    """
+    # unpack constants
+    p1, p2, q0, q1, q2, b1 = (bc['p1'], bc['p2'], bc['q0'], bc['q1'], bc['q2'], bc['b1'])
+    Rv_micro = 0.0
+
+    # build system of equations (obtained from analytically solving for constants as defined in paper)
+    # see H. J. Kim et al. "Patient-Specific Modeling of Blood Flow and Pressure in Human Coronary Arteries", p. 3198
+    Ra = q2 / p2
+    Ra_micro = (p1 ** 2 * q2 ** 2 - 2 * p1 * p2 * q1 * q2 + p2 ** 2 * q1 ** 2) / (
+                p2 * (- q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2))
+    Ca = -p2 ** 2 / (p1 * q2 - p2 * q1)
+    Cim = (- q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2) ** 2 / ((p1 * q2 - p2 * q1) * (
+                p1 ** 2 * q0 * q2 - p1 * p2 * q0 * q1 - p1 * q1 * q2 + p2 ** 2 * q0 ** 2 - 2 * p2 * q0 * q2 + p2 * q1 ** 2 + q2 ** 2))
+    Rv = -(
+                p1 ** 2 * q0 * q2 - p1 * p2 * q0 * q1 - p1 * q1 * q2 + p2 ** 2 * q0 ** 2 - 2 * p2 * q0 * q2 + p2 * q1 ** 2 + q2 ** 2) / (
+                     - q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2)
+
+    # check equation residuals
+    res = [p1 - (Ra_micro * Ca + (Rv + Rv_micro) * (Ca + Cim)),
+           p2 - (Ca * Cim * Ra_micro * (Rv + Rv_micro)),
+           q0 - (Ra + Ra_micro + Rv + Rv_micro),
+           q1 - (Ra * Ca * (Ra_micro + Rv + Rv_micro) + Cim * (Ra + Ra_micro) * (Rv + Rv_micro)),
+           q2 - (Ca * Cim * Ra * Ra_micro * (Rv + Rv_micro)),
+           b1 - (Cim * (Rv + Rv_micro))]
+    assert np.max(np.abs(res)) < 1e-5, 'SV coronary constants inconsistent'
+
+    # export constants
+    return {'Ra1': Ra, 'Ra2': Ra_micro, 'Ca': Ca, 'Cc': Cim, 'Rv1': Rv, 'P_v': 0.0}
 
 
 def write_svproj_file(db, geo):
@@ -153,6 +238,13 @@ def write_model(db, geo):
         # write header
         for s in model_head:
             f.write(s + '\n')
+
+        #             <segmentations>
+        #                 <seg name="aorta_final_new" />
+        #                 <seg name="btrunk_final" />
+        #                 <seg name="carotid_final" />
+        #                 <seg name="subclavian_final_new" />
+        #             </segmentations>
 
         # write faces
         f.write(t * 3 + '<faces>\n')
@@ -238,10 +330,12 @@ def write_mesh(db, geo):
 
 def write_inflow(db, geo, model, n_mode=10, n_sample_real=256):
     # read inflow conditions
-    time, inflow = db.get_inflow(geo)
+    opt = get_sv_opt(db, geo)
+    time = opt['inflow_data'][:, 0]
+    inflow = opt['inflow_data'][:, 1]
 
-    # smooth inflow
-    time, inflow = optimize_inflow(time, inflow, n_mode=n_mode, n_sample_real=n_sample_real)
+    if time is None:
+        raise ValueError('no inflow')
 
     # reverse flow for svOneDSolver
     if model == '1d':
@@ -250,17 +344,11 @@ def write_inflow(db, geo, model, n_mode=10, n_sample_real=256):
     # save inflow file
     fpath = db.get_sv_flow_path(geo, model)
     os.makedirs(os.path.dirname(fpath), exist_ok=True)
-
     np.savetxt(fpath, np.vstack((time, inflow)).T)
     # np.savetxt(fpath, np.vstack(([0, 1], [inflow[-1], inflow[-1]])).T)
     # np.savetxt(fpath, np.vstack(([0, 1], [0, 0])).T)
 
     return len(inflow), time[-1]
-
-
-def write_inflow_const(db, geo):
-    fpath = db.get_sv_flow_path(geo, '3d_constant')
-    np.savetxt(fpath, np.vstack(([0, 1], [1, 1])).T)
 
 
 def write_pre(db, geo, solver='svsolver'):
@@ -290,8 +378,8 @@ def write_pre(db, geo, solver='svsolver'):
         fpath_surf = os.path.join('mesh-complete', 'mesh-surfaces')
 
         # write surfaces (sort according to surface ID for readability)
-        f.write('set_surface_id_vtp ' + opt['mesh_vtp'] + ' 0\n')
-        f.write('set_surface_id_vtp ' + opt['mesh_inflow'] + ' 1\n')
+        f.write('set_surface_id_vtp ' + opt['mesh_vtp'] + ' 1\n')
+        f.write('set_surface_id_vtp ' + opt['mesh_inflow'] + ' 2\n')
         for k in outlets:
             v = bc_def['preid'][k] + 1
             if int(v) > 1:
@@ -311,7 +399,7 @@ def write_pre(db, geo, solver='svsolver'):
         f.write('prescribed_velocities_vtp ' + opt['mesh_inflow'] + '\n\n')
 
         # generate inflow
-        f.write('bct_analytical_shape ' + bc_def['bc']['inflow']['type'] + '\n')
+        f.write('bct_analytical_shape ' + opt['inflow_type'] + '\n')
         f.write('bct_period ' + opt['fourier_period'] + '\n')
         f.write('bct_point_number ' + opt['fourier_points'] + '\n')
         f.write('bct_fourier_mode_number ' + opt['fourier_modes'] + '\n')
@@ -324,24 +412,25 @@ def write_pre(db, geo, solver='svsolver'):
         f.write('fluid_density ' + opt['density'] + '\n')
         f.write('fluid_viscosity ' + opt['viscosity'] + '\n\n')
 
-        # no slip boundary condition
-        f.write('noslip_vtp ' + opt['mesh_walls'] + '\n\n')
-
         # reference pressure
         for cap in outlets:
             bc = bc_def['bc'][cap]
             if cap == 'inflow' or cap == 'wall':
                 continue
             if 'Po' in bc:
-                f.write('pressure_vtp ' + os.path.join(fpath_surf, cap + '.vtp') + ' ' + str(bc['Po']) + '\n')
+                p0 = str(bc['Po'])
             else:
-                f.write('zero_pressure_vtp ' + os.path.join(fpath_surf, cap + '.vtp') + '\n')
+                p0 = '0.0'
+            f.write('pressure_vtp ' + os.path.join(fpath_surf, cap + '.vtp') + ' ' + p0 + '\n')
         f.write('\n')
 
-        # set OSMSC results as initial condition
+        # set previous results as initial condition
         f.write('read_pressure_velocity_vtu ' + opt['mesh_initial'] + '\n\n')
         # f.write('initial_pressure 0\n')
         # f.write('initial_velocity 0.0001 0.0001 0.0001\n\n')
+
+        # no slip boundary condition
+        f.write('noslip_vtp ' + opt['mesh_walls'] + '\n\n')
 
         # request outputs
         f.write('write_geombc geombc.dat.1\n')
@@ -396,21 +485,19 @@ def write_solver(db, geo):
             bc_ids[bc_type[cap]] += [int(bc_def['preid'][cap]) + 1]
 
         # boundary conditions
-        names = {'rcr': 'RCR', 'resistance': 'Resistance', 'coronary': 'Coronary'}
+        names = {'rcr': 'RCR', 'resistance': 'Resistance', 'coronary': 'COR'}
         for t, v in bc_ids.items():
             f.write('Number of ' + names[t] + ' Surfaces: ' + str(len(v)) + '\n')
             f.write('List of ' + names[t] + ' Surfaces: ' + str(v).replace(',', '')[1:-1] + '\n')
 
-            if t == 'rcr':
-                f.write('RCR Values From File: True\n\n')
+            if t == 'rcr' or t == 'coronary':
+                f.write(names[t] + ' Values From File: True\n\n')
             elif t == 'resistance':
                 f.write('Resistance Values: ')
                 for cap, bc in bc_type.items():
                     if bc == 'resistance':
                         f.write(str(bc_def['bc'][cap]['R']) + ' ')
                 f.write('\n\n')
-            elif t == 'coronary':
-                raise ValueError('Coronary BCs not implemented')
             else:
                 raise ValueError('Boundary condition ' + t + ' unknown')
 
@@ -537,27 +624,56 @@ def write_simulation(db, geo):
             bc = bc_def['bc'][k]
 
             if tp == 'rcr':
-                rcr = write_value(params, geo, bc, 'Rp') + ' ' + \
-                      write_value(params, geo, bc, 'C') + ' ' + \
-                      write_value(params, geo, bc, 'Rd')
+                rcr_val = write_value(params, geo, bc, 'Rp') + ' ' + \
+                          write_value(params, geo, bc, 'C') + ' ' + \
+                          write_value(params, geo, bc, 'Rd')
 
                 f.write(t * 4 + '<prop key="BC Type" value="RCR" />\n')
                 f.write(t * 4 + '<prop key="C Values" value="" />\n')
                 if 'Po' in bc:
                     f.write(t * 4 + '<prop key="Pressure" value="' + write_value(params, geo, bc, 'Po') + '" />\n')
                 else:
-                    f.write(t * 4 + '<prop key="Pressure" value="0" />\n')
+                    f.write(t * 4 + '<prop key="Pressure" value="0.0" />\n')
                 f.write(t * 4 + '<prop key="R Values" value="" />\n')
-                f.write(t * 4 + '<prop key="Values" value="' + rcr + '" />\n')
+                f.write(t * 4 + '<prop key="Values" value="' + rcr_val + '" />\n')
             elif tp == 'resistance':
                 f.write(t * 4 + '<prop key="BC Type" value="Resistance" />\n')
                 if 'Po' in bc:
                     f.write(t * 4 + '<prop key="Pressure" value="' + write_value(params, geo, bc, 'Po') + '" />\n')
                 else:
-                    f.write(t * 4 + '<prop key="Pressure" value="0" />\n')
+                    f.write(t * 4 + '<prop key="Pressure" value="0.0" />\n')
                 f.write(t * 4 + '<prop key="Values" value="' + write_value(params, geo, bc, 'R') + '" />\n')
             elif tp == 'coronary':
-                raise ValueError('Coronary BCs not implemented')
+                # convert parameters to SimVascular format
+                bc_sv = coronary_sv_to_oned(bc)
+
+                c_val = write_value(params, geo, bc_sv, 'Ca') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Cc')
+                r_val = write_value(params, geo, bc_sv, 'Ra1') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Ra2') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Rv1')
+                p_val = write_value(params, geo, bc_sv, 'P_v')
+                a_val = write_value(params, geo, bc_sv, 'Ra1') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Ca') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Ra2') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Cc') + ' ' + \
+                        write_value(params, geo, bc_sv, 'Rv1')
+
+                p_v = bc_def['coronary'][bc['Pim']]
+
+                # save ventricular pressure to file
+                f_out = os.path.join(db.get_solve_dir_3d(geo), bc['Pim'])
+                np.savetxt(f_out, p_v)
+
+                f.write(t * 4 + '<prop key="BC Type" value="Coronary" />\n')
+                f.write(t * 4 + '<prop key="C Values" value="' + c_val + '" />\n')
+                f.write(t * 4 + '<prop key="Original File" value="' + os.path.join(geo, bc['Pim']) + '" />\n')
+                f.write(t * 4 + '<prop key="Pressure" value="' + p_val + '" />\n')
+                f.write(t * 4 + '<prop key="Pressure Period" value="' + str(p_v[-1, 0]) + '" />\n')
+                f.write(t * 4 + '<prop key="Pressure Scaling" value="1.0" />\n')
+                f.write(t * 4 + '<prop key="R Values" value="' + r_val + '" />\n')
+                f.write(t * 4 + '<prop key="Timed Pressure" value="' + array_to_sv(p_v) + '" />\n')
+                f.write(t * 4 + '<prop key="Values" value="' + a_val + '" />\n')
             else:
                 raise ValueError('Boundary condition ' + tp + ' unknown')
 
@@ -597,7 +713,7 @@ def write_value(params, geo, bc, name):
     return str(get_in_model_units(params['sim_units'], name[0], float(bc[name])))
 
 
-def write_bc(fdir, db, geo, write_face=True):
+def write_bc(fdir, db, geo, write_face=True, model='3d'):
     # get boundary conditions
     bc_def, params = db.get_bcs(geo)
 
@@ -617,7 +733,7 @@ def write_bc(fdir, db, geo, write_face=True):
     bc_file_names = {'rcr': 'rcrt.dat', 'resistance': 'resistance.dat', 'coronary': 'cort.dat'}
 
     # keyword to indicate a new boundary condition
-    keyword = '2'
+    keywords = {'rcr': '2', 'coronary': '1001'}
 
     # create bc-files for every bc type
     u_bc_types = list(set(bc_type.values()))
@@ -631,7 +747,7 @@ def write_bc(fdir, db, geo, write_face=True):
 
             # write keyword for new faces in first line
             if t == 'rcr' or t == 'coronary':
-                files[t].write(keyword + '\n')
+                files[t].write(keywords[t] + '\n')
         else:
             return None, 'boundary condition not implemented (' + t + ')'
 
@@ -641,7 +757,7 @@ def write_bc(fdir, db, geo, write_face=True):
         t = bc_type[s]
         f = files[t]
         if t == 'rcr':
-            f.write(keyword + '\n')
+            f.write(keywords[t] + '\n')
             if write_face:
                 f.write(s + '\n')
             f.write(write_value(params, geo, bc, 'Rp') + '\n')
@@ -657,8 +773,9 @@ def write_bc(fdir, db, geo, write_face=True):
             f.write(write_value(params, geo, bc, 'R') + ' ')
             f.write(write_value(params, geo, bc, 'Po') + '\n')
         elif t == 'coronary':
-            f.write(keyword + '\n')
-            f.write(s + '\n')
+            f.write(keywords[t] + '\n')
+            if model == '1d':
+                f.write(s + '\n')
             f.write(write_value(params, geo, bc, 'q0') + '\n')
             f.write(write_value(params, geo, bc, 'q1') + '\n')
             f.write(write_value(params, geo, bc, 'q2') + '\n')
@@ -671,7 +788,6 @@ def write_bc(fdir, db, geo, write_face=True):
             f.write(write_value(params, geo, bc, 'dQinidT') + '\n')
             f.write(write_value(params, geo, bc, 'dPinidT') + '\n')
 
-            print(bc)
             # write time and pressure pairs
             for m in bc_def['coronary'][bc['Pim']]:
                 f.write(str(m[0]) + ' ' + str(get_in_model_units(params['sim_units'], 'P', m[1])) + '\n')
@@ -686,7 +802,7 @@ def write_bc(fdir, db, geo, write_face=True):
 def copy_files(db, geo):
     # get solver options
     opt = get_sv_opt(db, geo)
-    
+
     # define paths
     sim_dir = db.get_solve_dir_3d(geo)
     fpath_surf = os.path.join(sim_dir, 'mesh-complete', 'mesh-surfaces')
@@ -695,7 +811,8 @@ def copy_files(db, geo):
     os.makedirs(fpath_surf, exist_ok=True)
 
     # copy inflow
-    shutil.copy(db.get_sv_flow_path(geo, '3d'), os.path.join(sim_dir, 'inflow.flow'))
+    np.savetxt(os.path.join(sim_dir, 'inflow.flow'), opt['inflow_data'])
+    # shutil.copy(db.get_sv_flow_path(geo, '3d'), os.path.join(sim_dir, 'inflow.flow'))
 
     # copy cap meshes
     for f in glob.glob(os.path.join(db.get_sv_meshes(geo), 'caps', '*.vtp')):
@@ -751,17 +868,17 @@ def create_sv_project(db, geo):
     if not success:
         return err
 
-    try:
     # if True:
+    try:
         make_folders(db, geo)
+        write_inflow(db, geo, '3d')
+        copy_files(db, geo)
 
         write_svproj_file(db, geo)
-        write_inflow_const(db, geo)
-        write_inflow(db, geo, '3d')
+        # write_inflow_const(db, geo)
         write_model(db, geo)
         write_simulation(db, geo)
 
-        copy_files(db, geo)
         write_mesh(db, geo)
         write_pre(db, geo, 'svsolver')
         # write_pre(db, geo, 'perigee')
