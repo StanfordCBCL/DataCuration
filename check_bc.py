@@ -57,7 +57,6 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
     else:
         raise ValueError('Unknown boundary conditions')
     n_cycle = np.max([int((t_rcr * n_rcr) // time[-1]), n_rcr])
-    # pdb.set_trace()
 
     # 0d time
     t0 = 0.0  # best to set this as zero
@@ -99,8 +98,9 @@ def check_bc(db, geo, plot_rerun=True):
     post = Post()
 
     # collect results
-    use_bc = False
-    res, time = collect_results_db_3d_3d(db, geo, bc=use_bc)
+    if not os.path.exists(db.get_3d_flow_rerun(geo)):
+        return
+    res, time = collect_results_db_3d_3d(db, geo)
     if res is None:
         return
 
@@ -112,6 +112,7 @@ def check_bc(db, geo, plot_rerun=True):
 
     print('Plotting ' + geo)
 
+    use_bc = False
     if use_bc:
         rerun_name = '3d_rerun_bc'
     else:
@@ -150,7 +151,6 @@ def check_bc(db, geo, plot_rerun=True):
         # bc inlet flow
         inlet_flow = res[br]['flow'][m + '_cap']
         inlet_pres = res[br]['pressure'][m + '_cap']
-        # pdb.set_trace()
 
         p = {}
         if t == 'rcr':
@@ -204,7 +204,7 @@ def check_bc(db, geo, plot_rerun=True):
 
         # calculate error
         diff = interp1d(t_bc, p_bc, fill_value='extrapolate')(inlet_time) - inlet_pres
-        err = np.mean(np.abs(diff)) / (np.max(inlet_pres) - np.min(inlet_pres))
+        err = np.mean(np.abs(diff)) / np.mean(inlet_pres)
         errors += [err]
 
         # save to file
@@ -229,7 +229,8 @@ def check_bc(db, geo, plot_rerun=True):
     np.save(db.get_bc_0D_path(geo), res_bc)
 
     # add error to log
-    db.add_bc_err(geo, max_err)
+    if m == '3d':
+        db.add_bc_err(geo, max_err)
 
 
 def plot(db, geometries):
@@ -249,17 +250,24 @@ def plot(db, geometries):
     err = []
     col = []
     for g, e in errors.items():
-        geo += [g]
-        err += [e]
-        col += [colors[db.get_params(g)['deliverable_category']]]
+        if g in geometries:
+            geo += [g]
+            err += [e]
+            col += [colors[db.get_params(g)['deliverable_category']]]
 
     # sort according to error
     order = np.argsort(err)
-    # order = np.argsort(geo)
+    order = np.argsort(geo)
 
     geo = np.array(geo)[order]
     err = np.array(err)[order]
     col = np.array(col)[order]
+
+    geo_str = '['
+    for i in np.where(err > 0.1)[0]:
+        geo_str += '\'' + geo[i] + '\', '
+    geo_str = geo_str[:-2] + ']'
+    # print(geo_str)
 
     fig1, ax1 = plt.subplots(dpi=400, figsize=(15, 6))
     plt.cla()
