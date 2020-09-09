@@ -84,18 +84,23 @@ class ClosestPoints:
 
         self.locator = locator
 
-    def search(self, points):
+    def search(self, points, radius=None):
         """
         Get ids of points in geometry closest to input points
         Args:
             points: list of points to be searched
-
+            radius: optional, search radius
         Returns:
             Id list
         """
         ids = []
         for p in points:
-            ids += [self.locator.FindClosestPoint(p)]
+            if radius is not None:
+                result = vtk.vtkIdList()
+                self.locator.FindPointsWithinRadius(radius, p, result)
+                ids += [result.GetId(k) for k in range(result.GetNumberOfIds())]
+            else:
+                ids += [self.locator.FindClosestPoint(p)]
         return ids
 
 
@@ -273,9 +278,9 @@ def extract_surface(inp):
         extr: vtkExtractSurface object
     """
     extr = vtk.vtkDataSetSurfaceFilter()
-    extr.SetInputData(inp.GetOutput())
+    extr.SetInputData(inp)
     extr.Update()
-    return extr
+    return extr.GetOutput()
 
 
 def clean(inp):
