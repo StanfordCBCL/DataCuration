@@ -63,13 +63,11 @@ def extract_results(fpath_1d, fpath_3d, fpath_out, only_caps=False):
         fpath_1d: path to 1d model
         fpath_3d: path to 3d simulation results
         fpath_out: output path
+        only_caps: extract solution only at caps, not in interior (much faster)
 
     Returns:
         res: dictionary of results in all branches, in all segments for all result arrays
     """
-    if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
-        return None
-
     # read 1d and 3d model
     reader_1d = read_geo(fpath_1d).GetOutput()
     reader_3d = read_geo(fpath_3d).GetOutput()
@@ -141,6 +139,9 @@ def main(db, geometries):
         # if os.path.exists(db.get_3d_flow_path_oned_vtp(geo)):
         #     print('  Already exists. Skipping...')
         #     continue
+
+        if not os.path.exists(fpath_1d) or not os.path.exists(fpath_3d):
+            continue
 
         # extract 3d results integrated over cross-section
         try:
