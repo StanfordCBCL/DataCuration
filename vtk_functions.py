@@ -195,7 +195,10 @@ def calculator(inp, function, inp_arrays, out_array):
     for a in inp_arrays:
         calc.AddVectorArrayName(a)
     calc.SetInputData(inp.GetOutput())
-    calc.SetAttributeModeToUsePointData()
+    if hasattr(calc, 'SetAttributeModeToUsePointData'):
+        calc.SetAttributeModeToUsePointData()
+    else:
+        calc.SetAttributeTypeToPointData()
     calc.SetFunction(function)
     calc.SetResultArrayName(out_array)
     calc.Update()
