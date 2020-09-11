@@ -83,7 +83,7 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
         raise ValueError('Unknown boundary conditions')
 
     # get last cycle
-    p_out = p_0d[i_last - 1]
+    p_out = p_0d[i_last]
 
     # check if solution is periodic
     # delta_p = np.abs(np.mean(p_0d[i_last - 1] - p_0d[i_prev - 1]) / np.mean(p_0d[i_last - 1]))

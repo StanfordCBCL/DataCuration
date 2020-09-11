@@ -3,59 +3,14 @@ import numpy as np
 from network_util_NR import *
 import matplotlib.pyplot as plt
 
-
-def run_network_util_rcr(block_list, deltat, time):
+def run_network_util(block_list, deltat, time, bc_type):
     connect_list, wdict = connect_blocks_by_inblock_list(block_list)
-
     neq = compute_neq(block_list, wdict)  # compute number of equations
-
     for b in block_list:  # run a consistency check
         check_block_connection(b)
-
     var_name_list = assign_global_ids(block_list, wdict)  # assign solution variables with global ID
 
     y0, ydot0 = initialize_solution_structures(neq)  # initialize solution structures
-    curr_y = y0
-    curr_ydot = ydot0
-
-    rho = 0.1
-    args = {}
-    args['Time step'] = deltat
-    args['rho'] = rho
-    args['Wire dictionary'] = wdict
-
-    ylist = [curr_y.copy()]
-
-    for t in time[1:]:
-        args['Solution'] = curr_y
-        curr_y, curr_ydot = gen_alpha_dae_integrator_NR(curr_y, curr_ydot, t, block_list, args, deltat, rho)
-        ylist.append(curr_y)
-
-    ylist = np.array(ylist)
-
-    for i in range(len(ylist[0, :])):
-        if var_name_list[i] == "P_inflow_rcr":
-            inlet_pressure = ylist[:, i]
-            return inlet_pressure
-
-
-def run_network_util_coronary(block_list, deltat, time):
-    connect_list, wdict = connect_blocks_by_inblock_list(block_list)
-
-    neq = compute_neq(block_list, wdict)  # compute number of equations
-
-    for b in block_list:  # run a consistency check
-        check_block_connection(b)
-
-    var_name_list = assign_global_ids(block_list, wdict)  # assign solution variables with global ID
-
-    y0, ydot0 = initialize_solution_structures(neq)  # initialize solution structures
-
-    initial_pressure = 0  # change according to your desired value
-    for i in range(len(var_name_list)):
-        if var_name_list[i].startswith("P_"):
-            y0[i] = initial_pressure
-
     curr_y = y0.copy()
     curr_ydot = ydot0.copy()
 
@@ -66,7 +21,6 @@ def run_network_util_coronary(block_list, deltat, time):
     args['Wire dictionary'] = wdict
 
     ylist = [curr_y.copy()]
-
     for t in time[1:]:
         args['Solution'] = curr_y
         curr_y, curr_ydot = gen_alpha_dae_integrator_NR(curr_y, curr_ydot, t, block_list, args, deltat, rho)
@@ -79,12 +33,10 @@ def run_network_util_coronary(block_list, deltat, time):
     ###############
 
     ylist = np.array(ylist)
-
     for i in range(len(ylist[0, :])):
-        if var_name_list[i] == "P_inflow_coronary":
+        if var_name_list[i] == "P_inflow_" + bc_type:
             inlet_pressure = ylist[:, i]
             return inlet_pressure
-
 
 def run_rcr(Qfunc, time, p, distal_pressure):
     deltat = time[1] - time[0]
@@ -95,14 +47,19 @@ def run_rcr(Qfunc, time, p, distal_pressure):
     ground = PressureRef(connecting_block_list=['rcr'], Pref=distal_pressure, name='ground', flow_directions=[-1])
     block_list = [inflow, rcr, ground]
 
-    return run_network_util_rcr(block_list, deltat, time)
+    return run_network_util(block_list, deltat, time, bc_type = "rcr")
 
 
 def run_coronary(Qfunc, time, p, p_v_time, p_v_pres, cardiac_cycle_period):
-    # pressure derivative
-    dt = np.diff(p_v_time)
-    dp_dt = np.append(np.diff(p_v_pres) / dt, (p_v_pres[0] - p_v_pres[-1]) / dt[-1])
-    dPvdt_f = np.vstack((p_v_time, dp_dt)).T
+    # compute intramyocadial pressure derivative
+    p_v_time = p_v_time.tolist()
+    p_v_pres = p_v_pres.tolist()
+    dPvdt_f = np.zeros((len(p_v_time), 2))
+    dPvdt_f[:, 0] = p_v_time
+    deltat_temp = p_v_time[1] - p_v_time[0]
+    extended_time = np.array([p_v_time[0] - deltat_temp] + p_v_time + [p_v_time[-1] + deltat_temp]) # extend time beyond the first and last boundaries to get a periodic dPvdt
+    p_v_pres_extended = np.array([p_v_pres[-2]] + p_v_pres + [p_v_pres[1]])
+    dPvdt_f[:, 1] = np.gradient(p_v_pres_extended, extended_time)[1:-1]
 
     distal_pressure = 0.0
     deltat = time[1] - time[0]
@@ -114,4 +71,4 @@ def run_coronary(Qfunc, time, p, p_v_time, p_v_pres, cardiac_cycle_period):
                                                        name='coronary', flow_directions=[-1])
     block_list = [inflow, coronary]
 
-    return run_network_util_coronary(block_list, deltat, time)
+    return run_network_util(block_list, deltat, time, bc_type = "coronary")
