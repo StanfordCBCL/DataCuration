@@ -93,6 +93,67 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
     return t_out, p_out
 
 
+def compare_0d(db, geo, res, time, m):
+    # get boundary conditions
+    bc_def, params = db.get_bcs(geo)
+    bc_type, err = db.get_bc_type(geo)
+
+    inlet_time = time[m]
+
+    # get outlets
+    caps = get_caps_db(db, geo)
+    outlets = {}
+    for cp, br in caps.items():
+        if 'inflow' not in cp:
+            outlets[cp] = br
+
+    res_bc = defaultdict(dict)
+    for j, (cp, br) in enumerate(outlets.items()):
+        # cap bcs
+        bc = bc_def['bc'][cp]
+        t = bc_type[cp]
+
+        # bc inlet flow
+        inlet_flow = res[br]['flow'][m + '_cap']
+
+        # select boundary condition
+        p = {}
+        if t == 'rcr':
+            p['Rp'] = get_in_model_units(params['sim_units'], 'R', bc['Rp'])
+            p['C'] = get_in_model_units(params['sim_units'], 'C', bc['C'])
+            p['Rd'] = get_in_model_units(params['sim_units'], 'R', bc['Rd'])
+            if 'Po' in bc:
+                rcr_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
+            else:
+                rcr_po = 0.0
+
+            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, rcr_po)
+        elif t == 'resistance':
+            r_res = get_in_model_units(params['sim_units'], 'R', bc['R'])
+            r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
+
+            res_bc[br]['t'] = inlet_time
+            res_bc[br]['p'] = r_po + r_res * inlet_flow
+        elif t == 'coronary':
+            if not bc_def['coronary']:
+                continue
+
+            cor = coronary_sv_to_oned(bc)
+            p['R1'] = get_in_model_units(params['sim_units'], 'R', cor['Ra1'])
+            p['R2'] = get_in_model_units(params['sim_units'], 'R', cor['Ra2'])
+            p['R3'] = get_in_model_units(params['sim_units'], 'R', cor['Rv1'])
+            p['C1'] = get_in_model_units(params['sim_units'], 'C', cor['Ca'])
+            p['C2'] = get_in_model_units(params['sim_units'], 'C', cor['Cc'])
+
+            p_v_time = bc_def['coronary'][bc['Pim']][:, 0]
+            p_v_pres = bc_def['coronary'][bc['Pim']][:, 1]
+            p_v = get_in_model_units(params['sim_units'], 'P', p_v_pres)
+
+            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_time, p_v)).T)
+
+    return res_bc
+
+
 def check_bc(db, geo, plot_rerun=True):
     # get post-processing constants
     post = Post()
@@ -102,12 +163,6 @@ def check_bc(db, geo, plot_rerun=True):
         return
     res, time = collect_results_db_3d_3d(db, geo)
     if res is None:
-        return
-
-    # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
-    bc_type, err = db.get_bc_type(geo)
-    if bc_def is None:
         return
 
     print('Plotting ' + geo)
@@ -124,12 +179,18 @@ def check_bc(db, geo, plot_rerun=True):
         m = '3d'
     inlet_time = time[m]
 
+    # get 0d results
+    res_0d = compare_0d(db, geo, res, time, m)
+
     # get outlets
     caps = get_caps_db(db, geo)
     outlets = {}
     for cp, br in caps.items():
         if 'inflow' not in cp:
             outlets[cp] = br
+
+    # bounbdary condition types
+    bc_type, err = db.get_bc_type(geo)
 
     # get cap names
     names = db.get_cap_names(geo)
@@ -144,47 +205,7 @@ def check_bc(db, geo, plot_rerun=True):
     res_bc = defaultdict(dict)
     errors = []
     for j, (cp, br) in enumerate(outlets.items()):
-        # cap bcs
-        bc = bc_def['bc'][cp]
         t = bc_type[cp]
-
-        # bc inlet flow
-        inlet_flow = res[br]['flow'][m + '_cap']
-        inlet_pres = res[br]['pressure'][m + '_cap']
-
-        p = {}
-        if t == 'rcr':
-            p['Rp'] = get_in_model_units(params['sim_units'], 'R', bc['Rp'])
-            p['C'] = get_in_model_units(params['sim_units'], 'C', bc['C'])
-            p['Rd'] = get_in_model_units(params['sim_units'], 'R', bc['Rd'])
-            if 'Po' in bc:
-                rcr_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-            else:
-                rcr_po = 0.0
-
-            t_bc, p_bc = run_0d_cycles(inlet_flow, inlet_time, p, rcr_po)
-        elif t == 'resistance':
-            r_res = get_in_model_units(params['sim_units'], 'R', bc['R'])
-            r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-
-            t_bc = inlet_time
-            p_bc = r_po + r_res * inlet_flow
-        elif t == 'coronary':
-            if not bc_def['coronary']:
-                continue
-
-            cor = coronary_sv_to_oned(bc)
-            p['R1'] = get_in_model_units(params['sim_units'], 'R', cor['Ra1'])
-            p['R2'] = get_in_model_units(params['sim_units'], 'R', cor['Ra2'])
-            p['R3'] = get_in_model_units(params['sim_units'], 'R', cor['Rv1'])
-            p['C1'] = get_in_model_units(params['sim_units'], 'C', cor['Ca'])
-            p['C2'] = get_in_model_units(params['sim_units'], 'C', cor['Cc'])
-
-            p_v_time = bc_def['coronary'][bc['Pim']][:, 0]
-            p_v_pres = bc_def['coronary'][bc['Pim']][:, 1]
-            p_v = get_in_model_units(params['sim_units'], 'P', p_v_pres)
-
-            t_bc, p_bc = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_time, p_v)).T)
 
         # plot settings
         ax[j].grid(True)
@@ -196,20 +217,20 @@ def check_bc(db, geo, plot_rerun=True):
             ax[j].yaxis.set_tick_params(which='both', labelleft=True)
 
         # plot bcs
-        ax[j].plot(inlet_time, inlet_pres * post.convert[f], post.styles[m], color=post.colors[m])
-        ax[j].plot(t_bc, p_bc * post.convert[f], 'k--')
+        ax[j].plot(inlet_time, res[br]['pressure'][m + '_cap'] * post.convert[f], post.styles[m], color=post.colors[m])
+        ax[j].plot(res_0d[br]['t'], res_0d[br]['p'] * post.convert[f], 'k--')
 
         # legend
         ax[j].legend([rerun_name.upper(), '0D ' + t.upper()])
 
         # calculate error
-        diff = interp1d(t_bc, p_bc, fill_value='extrapolate')(inlet_time) - inlet_pres
-        err = np.mean(np.abs(diff)) / np.mean(inlet_pres)
+        diff = interp1d(res_0d[br]['t'], res_0d[br]['p'], fill_value='extrapolate')(inlet_time) - res[br]['pressure'][m + '_cap']
+        err = np.mean(np.abs(diff)) / np.mean(res[br]['pressure'][m + '_cap'])
         errors += [err]
 
         # save to file
-        res_bc['time'] = t_bc
-        res_bc['pressure'][br] = p_bc
+        res_bc['time'] = res_0d[br]['t']
+        res_bc['pressure'][br] = res_0d[br]['p']
 
     max_err = np.max(errors) * 100
     max_outlet = db.get_cap_names(geo)[list(outlets.keys())[np.argmax(errors)]]
