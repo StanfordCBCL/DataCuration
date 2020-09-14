@@ -364,6 +364,69 @@ def region_grow(geo, seed, array, n_max=99999):
     return [pids_all.GetId(k) for k in range(pids_all.GetNumberOfIds())]
 
 
+def region_grow_centerline(geo, seed_points, seed_ids, array_ids, array_dist, n_max=99999):
+    pids_all = vtk.vtkIdList()
+    cids_all = vtk.vtkIdList()
+
+    array_ids[seed_points] = seed_ids
+
+    surf = extract_surface(geo)
+    surf_ids = v2n(surf.GetPointData().GetArray('GlobalNodeID'))
+
+    offset = np.max(v2n(geo.GetPointData().GetArray('GlobalNodeID')) - np.arange(geo.GetNumberOfPoints()) - 1)
+    assert offset == 0, 'nodes in volume geometry are not ordered consequtively'
+
+    all_pids = []
+    pids = vtk.vtkIdList()
+    for s in seed_points:
+        pids.InsertUniqueId(s)
+        pids_all.InsertUniqueId(s)
+    all_pids += [pids]
+
+    n_ids_old = -1
+    n_ids_new = 0
+    i = 0
+    # loop until region stops growing or reaches maximum number of iterations
+    while n_ids_old != n_ids_new and i < n_max:
+        i += 1
+        # grow region one cell outwards
+        n_ids_old = n_ids_new
+        n_ids_new = 0
+        for j in range(len(all_pids)):
+            # grow region one step
+            all_ids_old = all_pids[j]
+            all_pids[j] = grow(geo, array_ids, all_pids[j], pids_all, cids_all)
+
+            # update region size
+            n_ids_new += pids_all.GetNumberOfIds()
+            print(n_ids_new)
+
+            # create point locator with old wave front
+            points = vtk.vtkPoints()
+            points.Initialize()
+            for k in range(all_ids_old.GetNumberOfIds()):
+                # surface point can't be new seed point
+                if all_ids_old.GetId(k) in surf_ids:
+                    continue
+                # points.InsertNextPoint(geo.GetPoint(all_ids_old.GetId(k)))
+                points.InsertPoint(k, geo.GetPoint(all_ids_old.GetId(k)))
+
+            dataset = vtk.vtkPolyData()
+            dataset.SetPoints(points)
+
+            locator = vtk.vtkPointLocator()
+            locator.Initialize()
+            locator.SetDataSet(dataset)
+            locator.BuildLocator()
+
+            # find closest point in new wave front
+            for k in range(all_pids[j].GetNumberOfIds()):
+                i_old = locator.FindClosestPoint(geo.GetPoint(all_pids[j].GetId(k)))
+                i_geo = all_ids_old.GetId(i_old)
+                array_ids[all_pids[j].GetId(k)] = array_ids[i_geo]
+                array_dist[all_pids[j].GetId(k)] = i
+
+
 def region_grow_simultaneous(geo, seed, array_ids, array_dist, n_max=99999):
     pids_all = vtk.vtkIdList()
     cids_all = vtk.vtkIdList()
@@ -404,6 +467,7 @@ def region_grow_simultaneous(geo, seed, array_ids, array_dist, n_max=99999):
 
             # update region size
             n_ids_new += pids_all.GetNumberOfIds()
+            print(n_ids_new)
 
             # update arrays
             for k in range(all_pids[j].GetNumberOfIds()):
