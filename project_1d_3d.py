@@ -12,7 +12,7 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 
 from lift_laplace import StiffnessMatrix
 from get_database import Database, SimVascular, Post, input_args
-from vtk_functions import read_geo, write_geo, ClosestPoints, cell_connectivity, region_grow_centerline, collect_arrays
+from vtk_functions import read_geo, write_geo, ClosestPoints, cell_connectivity, region_grow, collect_arrays
 from simulation_io import map_1d_to_centerline
 
 
@@ -79,7 +79,7 @@ def get_1d_3d_map(f_1d, f_vol):
     # call region growing algorithm
     ids = -1 * np.ones(vol.GetNumberOfPoints(), dtype=int)
     dist = -1 * np.ones(vol.GetNumberOfPoints(), dtype=int)
-    region_grow_centerline(vol, seed_points, seed_ids, ids, dist, n_max=999)
+    region_grow(vol, seed_points, seed_ids, ids, dist, n_max=999)
 
     return ids, dist + 1
 
@@ -119,7 +119,7 @@ def main(db, geometries):
         f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
         f_0d = db.get_0d_flow_path_vtp(geo)
         f_1d = db.get_1d_flow_path_vtp(geo)
-        f_out = 'test4_' + geo + '.vtu'#db.get_initial_conditions_pressure(geo)
+        f_out = db.get_initial_conditions_pressure(geo)
 
         if os.path.exists(f_1d):
             print(geo + ' using 1d')

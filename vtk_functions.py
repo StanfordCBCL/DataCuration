@@ -341,31 +341,7 @@ def geo(inp):
     return poly.GetOutput()
 
 
-def region_grow(geo, seed, array, n_max=99999):
-    pids_all = vtk.vtkIdList()
-    cids_all = vtk.vtkIdList()
-
-    pids = vtk.vtkIdList()
-    for s in seed:
-        pids.InsertUniqueId(s)
-        pids_all.InsertUniqueId(s)
-
-    n_pids_old = -1
-    n_pids_new = 0
-    i = 0
-    # loop until region stops growing or reaches maximum number of iterations
-    while n_pids_old != n_pids_new and i < n_max:
-        # grow region one cell outwards
-        pids = grow(geo, array, pids, pids_all, cids_all)
-
-        n_pids_old = n_pids_new
-        n_pids_new = pids_all.GetNumberOfIds()
-        i += 1
-
-    return [pids_all.GetId(k) for k in range(pids_all.GetNumberOfIds())]
-
-
-def region_grow_centerline(geo, seed_points, seed_ids, array_ids, array_dist, n_max=99):
+def region_grow(geo, seed_points, seed_ids, array_ids, array_dist, n_max=99):
     # initialize ids
     array_ids[seed_points] = seed_ids
     cids_all = set()
@@ -415,55 +391,6 @@ def region_grow_centerline(geo, seed_points, seed_ids, array_ids, array_dist, n_
         for i_new in pids_new_arr:
             array_ids[i_new] = array_ids[pids_old_arr[locator.FindClosestPoint(geo.GetPoint(i_new))]]
             array_dist[i_new] = i
-
-
-def region_grow_simultaneous(geo, seed, array_ids, array_dist, n_max=99999):
-    pids_all = vtk.vtkIdList()
-    cids_all = vtk.vtkIdList()
-
-    seed_points = []
-    seed_ids = []
-
-    # collect all seed region points and ids
-    for bf, bifurcation in seed.items():
-        for branch in bifurcation.values():
-            seed_points += [branch]
-            seed_ids += [bf]
-
-            # color seed points
-            array_ids[branch] = bf
-
-    #
-    all_pids = []
-    for points in seed_points:
-        pids = vtk.vtkIdList()
-        for s in points:
-            pids.InsertUniqueId(s)
-            pids_all.InsertUniqueId(s)
-        all_pids += [pids]
-
-    n_pids_old = -1
-    n_pids_new = 0
-    i = 0
-    # loop until region stops growing or reaches maximum number of iterations
-    while n_pids_old != n_pids_new and i < n_max:
-        i += 1
-        # grow region one cell outwards
-        n_pids_old = n_pids_new
-        n_pids_new = 0
-        for j in range(len(all_pids)):
-            # grow region one step
-            all_pids[j] = grow(geo, array_ids, all_pids[j], pids_all, cids_all)
-
-            # update region size
-            n_pids_new += pids_all.GetNumberOfIds()
-            print(n_pids_new)
-
-            # update arrays
-            for k in range(all_pids[j].GetNumberOfIds()):
-                m = all_pids[j].GetId(k)
-                array_ids[m] = seed_ids[j]
-                array_dist[m] = i
 
 
 def grow(geo, array, pids_in, pids_all, cids_all):
