@@ -341,9 +341,13 @@ def geo(inp):
     return poly.GetOutput()
 
 
-def region_grow(geo, seed_points, seed_ids, array_ids, array_dist, n_max=99):
-    # initialize ids
+def region_grow(geo, seed_points, seed_ids, n_max=99):
+    # initialize output arrays
+    array_dist = -1 * np.ones(geo.GetNumberOfPoints(), dtype=int)
+    array_ids = -1 * np.ones(geo.GetNumberOfPoints(), dtype=int)
     array_ids[seed_points] = seed_ids
+
+    # initialize ids
     cids_all = set()
     pids_all = set(seed_points.tolist())
     pids_new = set(seed_points.tolist())
@@ -391,6 +395,8 @@ def region_grow(geo, seed_points, seed_ids, array_ids, array_dist, n_max=99):
         for i_new in pids_new_arr:
             array_ids[i_new] = array_ids[pids_old_arr[locator.FindClosestPoint(geo.GetPoint(i_new))]]
             array_dist[i_new] = i
+
+    return array_ids, array_dist + 1
 
 
 def grow(geo, array, pids_in, pids_all, cids_all):

@@ -77,11 +77,9 @@ def get_1d_3d_map(f_1d, f_vol):
     seed_ids = np.array(cp_1d.search(points_vol[seed_points]))
 
     # call region growing algorithm
-    ids = -1 * np.ones(vol.GetNumberOfPoints(), dtype=int)
-    dist = -1 * np.ones(vol.GetNumberOfPoints(), dtype=int)
-    region_grow(vol, seed_points, seed_ids, ids, dist, n_max=999)
+    ids, dist = region_grow(vol, seed_points, seed_ids, n_max=999)
 
-    return ids, dist + 1
+    return ids, dist
 
 
 def project_1d_3d_grow(f_1d, f_vol, f_out):
@@ -129,6 +127,10 @@ def main(db, geometries):
             f_red = f_0d
         else:
             print(geo + ' no 0d/1d solution found')
+            continue
+
+        if os.path.exists(f_out):
+            print('  map exists')
             continue
 
         project_1d_3d_grow(f_red, f_vol, f_out)
