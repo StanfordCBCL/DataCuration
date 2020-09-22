@@ -175,6 +175,9 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
     # get centerline arrays
     arrays_cent, _ = get_all_arrays(geo_cent)
 
+    # centerline points
+    points = v2n(geo_cent.GetPoints().GetData())
+
     # fields to export
     fields_res_1d = ['flow', 'pressure', 'wss']
     time = res['time']
@@ -183,6 +186,7 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
     # loop all result fields
     for f in fields_res_1d:
         array_f = np.zeros((arrays_cent['Path'].shape[0], n_t))
+        n_outlet = np.zeros(arrays_cent['Path'].shape[0])
         for br in res[f].keys():
             # get centerline path
             path_cent = arrays_cent['Path'][arrays_cent['BranchId'] == br]
@@ -193,6 +197,43 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
 
             # store in global array
             array_f[arrays_cent['BranchId'] == br] = f_cent
+
+            # add upstream part of branch within junction
+            if br == 0:
+                continue
+
+            # first point of branch
+            ip = np.where(arrays_cent['BranchId'] == br)[0][0]
+
+            # centerline that passes through branch (first occurence)
+            cid = np.where(arrays_cent['CenterlineId'][ip])[0][0]
+
+            # id of upstream junction
+            jc = arrays_cent['BifurcationId'][ip - 1]
+
+            # centerline within junction
+            jc_cent = np.where(np.logical_and(arrays_cent['BifurcationId'] == jc, arrays_cent['CenterlineId'][:, cid]))[
+                0]
+
+            # length of centerline within junction
+            jc_path = np.append(0, np.cumsum(np.linalg.norm(np.diff(points[jc_cent], axis=0), axis=1)))
+            jc_path /= jc_path[-1]
+
+            # results at upstream branch
+            res_br_u = res[f][arrays_cent['BranchId'][jc_cent[0] - 1]]
+
+            # results at beginning and end of centerline within junction
+            f0 = res_br_u[sorted(res_br_u.keys())[-1]][-1]
+            f1 = res[f][br][0][0]
+
+            # map 1d results to centerline using paths
+            array_f[jc_cent] += interp1d([0, 1], np.vstack((f0, f1)).T, fill_value='extrapolate')(jc_path).T
+
+            # count number of outlets of this junction
+            n_outlet[jc_cent] += 1
+
+            # normalize by number of outlets
+        array_f[n_outlet > 0] = (array_f[n_outlet > 0].T / n_outlet[n_outlet > 0]).T
 
         # assemble time steps
         if only_last:
@@ -323,7 +364,8 @@ def load_results_3d(f_res_3d):
 
     # get branch ids
     branches = np.unique(res['BranchId']).tolist()
-    branches.remove(-1)
+    if -1 in branches:
+        branches.remove(-1)
 
     # add time
     out = {'time': times}
@@ -381,7 +423,7 @@ def get_time(model, res, time, dt_3d=0, t_in=0):
         eps = 1.0e-12
 
         # select last cycle and shift time to start from zero
-        time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first, time[model + '_all'] <= t_last)
+        time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first - eps, time[model + '_all'] <= t_last + eps)
         time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_first
         for i in np.arange(1, n_cycle + 1):
             t_first = t_end * (i - 1)
@@ -647,24 +689,22 @@ def collect_results_db_3d_3d(db, geo, bc=False):
 
     # get paths
     f_res_3d_osmsc = db.get_3d_flow(geo)
+    if not os.path.exists(f_res_3d_osmsc):
+        return None, None
+
     if bc:
         f_res_3d_rerun = db.get_3d_flow_rerun_bc(geo)
     else:
         f_res_3d_rerun = db.get_3d_flow_rerun(geo)
-
-    if not os.path.exists(f_res_3d_osmsc):
-        return None, None
-
-    time_inflow, _ = db.get_inflow_smooth(geo)
-
-    if time_inflow is None:
+    if not os.path.exists(f_res_3d_rerun):
         return None, None
 
     # collect osmsc results
     collect_results('3d', res, time, f_res_3d_osmsc)
 
-    if not os.path.exists(f_res_3d_rerun):
-        return res, time
+    time_inflow, _ = db.get_inflow_smooth(geo)
+    if time_inflow is None:
+        return None, None
 
     # collect rerun results
     if bc:
@@ -703,6 +743,30 @@ def collect_results_db_3d_3d_spatial(db, geo):
     return res, time
 
 
+def export_last(db, geo):
+    f_res_1d = db.get_1d_flow_path(geo)
+
+    time_inflow, _ = db.get_inflow_smooth(geo)
+
+    # read results
+    res = get_dict(f_res_1d)
+
+    # get time information
+    time = {}
+    get_time('1d', res, time, t_in=time_inflow[-1])
+
+    res_out = {'time': time['1d']}
+    for f in res.keys():
+        if f == 'params':
+            continue
+        res_out[f] = {}
+        for br in res[f].keys():
+            res_out[f][br] = {}
+            for seg in res[f][br].keys():
+                res_out[f][br][seg] = res[f][br][seg][:, time['1d_last_cycle_i']]
+    np.save(db.gen_file('1d_flow_last', geo), res_out)
+
+
 def export_1d_xmdf(db, geo):
     f_geo_1d = db.get_1d_geo(geo)
     f_res_1d = db.get_1d_flow_path(geo)
@@ -731,6 +795,7 @@ def main(db, geometries):
 
         # export_1d_xmdf(db, geo)
         export_0d_vtp(db, geo)
+        # export_last(db, geo)
 
 
 if __name__ == '__main__':
