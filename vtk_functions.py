@@ -352,6 +352,9 @@ def region_grow(geo, seed_points, seed_ids, n_max=99):
     pids_all = set(seed_points.tolist())
     pids_new = set(seed_points.tolist())
 
+    surf = extract_surface(geo)
+    pids_surf = set(v2n(surf.GetPointData().GetArray('GlobalNodeID')).tolist())
+
     # loop until region stops growing or reaches maximum number of iterations
     i = 0
     while len(pids_new) > 0 and i < n_max:
@@ -361,26 +364,22 @@ def region_grow(geo, seed_points, seed_ids, n_max=99):
         # update
         pids_old = pids_new
 
-        # update region size
-        n_pids_new = len(pids_all)
-
         # print progress
         print_str = 'Iteration ' + str(i)
         print_str += '\tNew points ' + str(len(pids_old)) + '     '
-        print_str += '\tTotal points ' + str(n_pids_new)
+        print_str += '\tTotal points ' + str(len(pids_all))
         print(print_str)
 
         # grow region one step
         pids_new = grow(geo, array_ids, pids_old, pids_all, cids_all)
 
-        # convert to numpy arrays for indexing
-        pids_old_arr = np.array(list(pids_old))
-        pids_new_arr = np.array(list(pids_new))
+        # convert to array
+        pids_old_arr = list(pids_old)
 
         # create point locator with old wave front
         points = vtk.vtkPoints()
         points.Initialize()
-        for i_old in pids_old_arr:
+        for i_old in pids_old:
             points.InsertNextPoint(geo.GetPoint(i_old))
 
         dataset = vtk.vtkPolyData()
@@ -392,7 +391,7 @@ def region_grow(geo, seed_points, seed_ids, n_max=99):
         locator.BuildLocator()
 
         # find closest point in new wave front
-        for i_new in pids_new_arr:
+        for i_new in pids_new:
             array_ids[i_new] = array_ids[pids_old_arr[locator.FindClosestPoint(geo.GetPoint(i_new))]]
             array_dist[i_new] = i
 
