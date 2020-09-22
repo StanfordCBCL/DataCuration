@@ -16,7 +16,7 @@ from collections import OrderedDict
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-from get_bcs import get_bcs, get_params, get_in_model_units
+from get_bcs import get_bcs, get_params
 from vtk_functions import read_geo
 from common import get_dict
 
@@ -215,25 +215,25 @@ class Database:
         elif 'units' in name:
             geometries = []
             for geo in self.get_geometries():
-                _, params = self.get_bcs(geo)
-                if params is None:
+                bc_def = self.get_bcs(geo)
+                if bc_def is None:
                     continue
                 _, part, unit = name.split('_')
-                if part == 's' and params['sim_units'] == unit:
+                if part == 's' and bc_def['params']['sim_units'] == unit:
                     geometries += [geo]
-                elif part == 'm' and params['model_units'] == unit:
+                elif part == 'm' and bc_def['params']['model_units'] == unit:
                     geometries += [geo]
             print(geometries)
             for geo in geometries:
-                _, params = self.get_bcs(geo)
+                bc_def = self.get_bcs(geo)
 
-                print(get_in_model_units(params['sim_units'], 'viscosity', float(params['sim_viscosity'])))
+                print(bc_def['params']['sim_units'])
             sys.exit(1)
         elif name in ['aorta', 'aortofemoral', 'pulmonary', 'cerebrovascular', 'coronary']:
             geometries = []
             for geo in self.get_geometries():
-                _, params = self.get_bcs(geo)
-                if params is not None and params['deliverable_category'].lower() == name:
+                bc_def = self.get_bcs(geo)
+                if bc_def is not None and bc_def['params']['deliverable_category'].lower() == name:
                     geometries += [geo]
 
         else:
@@ -258,34 +258,7 @@ class Database:
             tcl, tcl_bc = get_tcl_paths(self.fpath_bc, geo, o)
             if os.path.exists(tcl) and os.path.exists(tcl_bc):
                 return get_bcs(tcl, tcl_bc)
-        return None, None
-
-    def get_bc_type(self, geo):
-        bc_def, _ = self.get_bcs(geo)
-
-        if bc_def is None:
-            return None, 'boundary conditions not found'
-
-        outlets = self.get_outlet_names(geo)
-
-        bc_type = {}
-        for s in outlets:
-            if s in bc_def['bc']:
-                bc = bc_def['bc'][s]
-            else:
-                return None, 'boundary conditions do not exist for surface ' + s
-
-            if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
-                bc_type[s] = 'rcr'
-            elif 'R' in bc and 'Po' in bc:
-                bc_type[s] = 'resistance'
-            elif 'COR' in bc:
-                bc_type[s] = 'coronary'
-            else:
-                pdb.set_trace()
-                return None, 'boundary conditions not implemented'
-
-        return bc_type, False
+        return None
 
     def has_loop(self, geo):
         # todo: find automatic way to check for loop
@@ -504,7 +477,7 @@ class Database:
     def get_cap_names(self, geo):
         caps = self.get_surface_names(geo, 'caps')
 
-        bc_def, _ = self.get_bcs(geo)
+        bc_def = self.get_bcs(geo)
 
         names = {}
         for c, n in bc_def['spname'].items():
@@ -535,8 +508,8 @@ class Database:
         time, inflow = flow[:, 0], flow[:, 1]
 
         # get simulation parameters
-        _, params = self.get_bcs(geo)
-        if params is None:
+        bc_def = self.get_bcs(geo)
+        if bc_def is None:
             return None, None
 
         # fix flow in last time step
@@ -551,7 +524,7 @@ class Database:
         flow = np.load(self.get_bc_flow_path(geo), allow_pickle=True).item()
 
         # read 3d boundary conditions
-        bc_def, _ = self.get_bcs(geo)
+        bc_def = self.get_bcs(geo)
         if bc_def is None:
             return None, None
 
@@ -627,7 +600,7 @@ class Database:
 
     def get_surface_ids(self, geo, surf='all'):
         surfaces = self.get_surface_names(geo, surf)
-        bc_def, _ = self.get_bcs(geo)
+        bc_def = self.get_bcs(geo)
         ids = []
         for s in surfaces:
             ids += [int(float(bc_def['spid'][s]))]
@@ -647,7 +620,7 @@ class Database:
         return os.path.join(self.fpath_study, 'simulation', geo + '.vtp')
 
     def get_outlet_names(self, geo):
-        bc_def, _ = self.get_bcs(geo)
+        bc_def = self.get_bcs(geo)
         if bc_def is None:
             return None
         names = [k for k, v in sorted(bc_def['preid'].items(), key=lambda kv: kv[1])]
@@ -678,30 +651,15 @@ class Database:
 
         return res
 
-    def get_constants(self, geo):
-        # get simulation parameters
-        _, params = self.get_bcs(geo)
-
-        if 'sim_density' in params:
-            constants = {'density': float(params['sim_density']), 'viscosity': float(params['sim_viscosity'])}
-        else:
-            return None
-
-        # convert units
-        for name, val in constants.items():
-            constants[name] = get_in_model_units(params['sim_units'], name, val)
-
-        return constants
-
     def get_3d_timestep(self, geo):
         # get model parameters
-        _, params = self.get_bcs(geo)
+        bc_def = self.get_bcs(geo)
 
         # read inflow conditions
         time, inflow = self.get_inflow(geo)
 
         # number of time steps
-        numstep = int(float(params['sim_steps_per_cycle']))
+        numstep = int(float(bc_def['params']['sim_steps_per_cycle']))
 
         # time step
         return time[-1] / numstep
@@ -737,10 +695,10 @@ class SimVascular:
     """
 
     def __init__(self):
-        self.svpre = '/usr/local/sv/svsolver/2019-02-07/svpre'
-        self.svsolver = '/usr/local/sv/svsolver/2019-02-07/svsolver'
+        self.svpre = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpre'
+        self.svsolver = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svsolver'
         self.svpost = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpost'
-        self.onedsolver = '/home/pfaller/work/repos/svOneDSolver/build_superlu/bin/OneDSolver'
+        self.onedsolver = '/home/pfaller/work/repos/svOneDSolver/build_skyline/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'

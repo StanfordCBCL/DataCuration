@@ -10,20 +10,18 @@ from collections import OrderedDict, defaultdict
 import numpy as np
 
 from get_database import input_args, Database, SVProject, SimVascular
-from get_bcs import get_in_model_units
 from inflow import optimize_inflow
 
 
 def get_sv_opt(db, geo, mode=''):
     # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
-    # bc_type, err = db.get_bc_type(geo)
+    bc_def = db.get_bcs(geo)
 
     # number of cycles
     n_cycle = estimate_n_cycle(db, geo)
 
     # number of time steps
-    numstep = int(float(params['sim_steps_per_cycle']))
+    numstep = int(float(bc_def['params']['sim_steps_per_cycle']))
 
     # time step
     dt = db.get_3d_timestep(geo)
@@ -119,7 +117,7 @@ def estimate_n_cycle(db, geo, n_tau=5):
     t_cycle = time[-1]
 
     # get RC time constant from boundary conditions
-    bc_def, params = db.get_bcs(geo)
+    bc_def = db.get_bcs(geo)
     tau_bc = []
     for bc in bc_def['bc'].values():
         if 'Rd' in bc:
@@ -218,7 +216,7 @@ def write_model(db, geo):
                  '</model>']
 
     # read boundary conditions
-    bc_def, _ = db.get_bcs(geo)
+    bc_def = db.get_bcs(geo)
     bc_def['preid']['wall'] = 0
 
     # get cap names
@@ -357,7 +355,7 @@ def write_pre(db, geo, solver='svsolver'):
     Create input file for svpre
     """
     # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
+    bc_def = db.get_bcs(geo)
 
     # read inflow conditions
     time, _ = db.get_inflow_smooth(geo)
@@ -446,8 +444,7 @@ def write_pre(db, geo, solver='svsolver'):
 
 def write_solver(db, geo):
     # get boundary conditions
-    bc_def, _ = db.get_bcs(geo)
-    bc_type, err = db.get_bc_type(geo)
+    bc_def = db.get_bcs(geo)
 
     # ordered outlets
     outlets = db.get_outlet_names(geo)
@@ -483,7 +480,7 @@ def write_solver(db, geo):
         # collect faces for each boundary condition type
         bc_ids = defaultdict(list)
         for cap in outlets:
-            bc_ids[bc_type[cap]] += [int(bc_def['preid'][cap]) + 1]
+            bc_ids[bc_def['bc_type'][cap]] += [int(bc_def['preid'][cap]) + 1]
 
         # boundary conditions
         names = {'rcr': 'RCR', 'resistance': 'Resistance', 'coronary': 'COR'}
@@ -495,7 +492,7 @@ def write_solver(db, geo):
                 f.write(names[t] + ' Values From File: True\n\n')
             elif t == 'resistance':
                 f.write('Resistance Values: ')
-                for cap, bc in bc_type.items():
+                for cap, bc in bc_def['bc_type'].items():
                     if bc == 'resistance':
                         f.write(str(bc_def['bc'][cap]['R']) + ' ')
                 f.write('\n\n')
@@ -542,8 +539,7 @@ def print_props(f, props, t):
 
 def write_simulation(db, geo):
     # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
-    bc_type, err = db.get_bc_type(geo)
+    bc_def = db.get_bcs(geo)
 
     # get outlet names
     outlets = db.get_outlet_names(geo)
@@ -621,18 +617,15 @@ def write_simulation(db, geo):
         for k in outlets:
             f.write(t * 3 + '<cap name="' + k + '">\n')
 
-            tp = bc_type[k]
+            tp = bc_def['bc_type'][k]
             bc = bc_def['bc'][k]
 
             if tp == 'rcr':
-                rcr_val = write_value(params, geo, bc, 'Rp') + ' ' + \
-                          write_value(params, geo, bc, 'C') + ' ' + \
-                          write_value(params, geo, bc, 'Rd')
-
+                rcr_val = ' '.join([str(bc[v]) for v in ['Rp', 'C', 'Rd']])
                 f.write(t * 4 + '<prop key="BC Type" value="RCR" />\n')
                 f.write(t * 4 + '<prop key="C Values" value="" />\n')
                 if 'Po' in bc:
-                    f.write(t * 4 + '<prop key="Pressure" value="' + write_value(params, geo, bc, 'Po') + '" />\n')
+                    f.write(t * 4 + '<prop key="Pressure" value="' + str(bc['Po']) + '" />\n')
                 else:
                     f.write(t * 4 + '<prop key="Pressure" value="0.0" />\n')
                 f.write(t * 4 + '<prop key="R Values" value="" />\n')
@@ -640,25 +633,18 @@ def write_simulation(db, geo):
             elif tp == 'resistance':
                 f.write(t * 4 + '<prop key="BC Type" value="Resistance" />\n')
                 if 'Po' in bc:
-                    f.write(t * 4 + '<prop key="Pressure" value="' + write_value(params, geo, bc, 'Po') + '" />\n')
+                    f.write(t * 4 + '<prop key="Pressure" value="' + str(bc['Po']) + '" />\n')
                 else:
                     f.write(t * 4 + '<prop key="Pressure" value="0.0" />\n')
-                f.write(t * 4 + '<prop key="Values" value="' + write_value(params, geo, bc, 'R') + '" />\n')
+                f.write(t * 4 + '<prop key="Values" value="' + str(bc['R']) + '" />\n')
             elif tp == 'coronary':
                 # convert parameters to SimVascular format
                 bc_sv = coronary_sv_to_oned(bc)
 
-                c_val = write_value(params, geo, bc_sv, 'Ca') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Cc')
-                r_val = write_value(params, geo, bc_sv, 'Ra1') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Ra2') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Rv1')
-                p_val = write_value(params, geo, bc_sv, 'P_v')
-                a_val = write_value(params, geo, bc_sv, 'Ra1') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Ca') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Ra2') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Cc') + ' ' + \
-                        write_value(params, geo, bc_sv, 'Rv1')
+                c_val = ' '.join([str(bc_sv[v]) for v in ['Ca', 'Cc']])
+                r_val = ' '.join([str(bc_sv[v]) for v in ['Ra1', 'Ra2', 'Rv1']])
+                p_val = str(bc_sv['P_v'])
+                a_val = ' '.join([str(bc_sv[v]) for v in ['Ra1', 'Ca', 'Ra2', 'Cc', 'Rv1']])
 
                 p_v = bc_def['coronary'][bc['Pim']]
 
@@ -710,22 +696,13 @@ def write_simulation(db, geo):
         f.write('</mitk_job>')
 
 
-def write_value(params, geo, bc, name):
-    return str(get_in_model_units(params['sim_units'], name[0], float(bc[name])))
-
-
 def write_bc(fdir, db, geo, write_face=True, model='3d'):
     # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
+    bc_def = db.get_bcs(geo)
 
     # check if bc-file exists
     if not bc_def:
         return None, 'boundary conditions do not exist'
-
-    # get type of bcs
-    bc_type, err = db.get_bc_type(geo)
-    if err:
-        return None, err
 
     # get outlet names
     outlets = db.get_outlet_names(geo)
@@ -737,7 +714,7 @@ def write_bc(fdir, db, geo, write_face=True, model='3d'):
     keywords = {'rcr': '2', 'coronary': '1001'}
 
     # create bc-files for every bc type
-    u_bc_types = list(set(bc_type.values()))
+    u_bc_types = list(set(bc_def['bc_type'].values()))
     files = {}
     fnames = []
     for t in u_bc_types:
@@ -755,43 +732,33 @@ def write_bc(fdir, db, geo, write_face=True, model='3d'):
     # write boundary conditions
     for s in outlets:
         bc = bc_def['bc'][s]
-        t = bc_type[s]
+        t = bc_def['bc_type'][s]
         f = files[t]
+        write_vals = lambda names: f.write('\n'.join([str(bc[v]) for v in names]))
         if t == 'rcr':
             f.write(keywords[t] + '\n')
             if write_face:
                 f.write(s + '\n')
-            f.write(write_value(params, geo, bc, 'Rp') + '\n')
-            f.write(write_value(params, geo, bc, 'C') + '\n')
-            f.write(write_value(params, geo, bc, 'Rd') + '\n')
+            write_vals(['Rp', 'C', 'Rd'])
             if 'Po' in bc and bc['Po'] != 0.0:
                 return None, 'RCR with Po unequal zero'
             # not sure what this does???
-            f.write('0.0 0\n')
+            f.write('\n0.0 0\n')
             f.write('1.0 0\n')
         elif t == 'resistance':
             f.write(s + ' ')
-            f.write(write_value(params, geo, bc, 'R') + ' ')
-            f.write(write_value(params, geo, bc, 'Po') + '\n')
+            f.write(str(bc['R']) + ' ')
+            f.write(str(bc['Po']) + '\n')
         elif t == 'coronary':
             f.write(keywords[t] + '\n')
             if model == '1d':
                 f.write(s + '\n')
-            f.write(write_value(params, geo, bc, 'q0') + '\n')
-            f.write(write_value(params, geo, bc, 'q1') + '\n')
-            f.write(write_value(params, geo, bc, 'q2') + '\n')
-            f.write(write_value(params, geo, bc, 'p0') + '\n')
-            f.write(write_value(params, geo, bc, 'p1') + '\n')
-            f.write(write_value(params, geo, bc, 'p2') + '\n')
-            f.write(write_value(params, geo, bc, 'b0') + '\n')
-            f.write(write_value(params, geo, bc, 'b1') + '\n')
-            f.write(write_value(params, geo, bc, 'b2') + '\n')
-            f.write(write_value(params, geo, bc, 'dQinidT') + '\n')
-            f.write(write_value(params, geo, bc, 'dPinidT') + '\n')
+            write_vals(['q0', 'q1', 'q2', 'p0', 'p1', 'p2', 'b0', 'b1', 'b2', 'dQinidT', 'dPinidT'])
+            f.write('\n')
 
             # write time and pressure pairs
             for m in bc_def['coronary'][bc['Pim']]:
-                f.write(str(m[0]) + ' ' + str(get_in_model_units(params['sim_units'], 'P', m[1])) + '\n')
+                f.write(str(m[0]) + ' ' + str(m[1]) + '\n')
 
     # close all opened files
     for t in u_bc_types:

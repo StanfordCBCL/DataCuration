@@ -18,7 +18,6 @@ from vtk_functions import read_geo, write_geo
 from get_bc_integrals import integrate_surfaces, integrate_bcs
 from simulation_io import get_caps_db, collect_results, collect_results_db_3d_3d, get_dict
 from compare_1d import add_image
-from get_bcs import get_in_model_units
 from get_sv_project import coronary_sv_to_oned
 from bc_0d import run_rcr, run_coronary
 
@@ -119,38 +118,20 @@ def compare_0d(db, geo, res, time, m):
         # select boundary condition
         p = {}
         if t == 'rcr':
-            p['Rp'] = get_in_model_units(params['sim_units'], 'R', bc['Rp'])
-            p['C'] = get_in_model_units(params['sim_units'], 'C', bc['C'])
-            p['Rd'] = get_in_model_units(params['sim_units'], 'R', bc['Rd'])
-            if 'Po' in bc:
-                rcr_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-            else:
-                rcr_po = 0.0
-
-            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, rcr_po)
+            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, bc, bc['Po'])
         elif t == 'resistance':
-            r_res = get_in_model_units(params['sim_units'], 'R', bc['R'])
-            r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-
             res_bc[br]['t'] = inlet_time
-            res_bc[br]['p'] = r_po + r_res * inlet_flow
+            res_bc[br]['p'] = bc['Po'] + bc['R'] * inlet_flow
         elif t == 'coronary':
             if not bc_def['coronary']:
                 continue
 
             cor = coronary_sv_to_oned(bc)
-            p['R1'] = get_in_model_units(params['sim_units'], 'R', cor['Ra1'])
-            p['R2'] = get_in_model_units(params['sim_units'], 'R', cor['Ra2'])
-            p['R3'] = get_in_model_units(params['sim_units'], 'R', cor['Rv1'])
-            p['C1'] = get_in_model_units(params['sim_units'], 'C', cor['Ca'])
-            p['C2'] = get_in_model_units(params['sim_units'], 'C', cor['Cc'])
+            p['R1'], p['R2'], p['R3'], p['C1'], p['C2'] = (cor['Ra1'], cor['Ra2'], cor['Rv1'], cor['Ca'], cor['Cc'])
+            p_v_t = bc_def['coronary'][bc['Pim']][:, 0]
+            p_v_p = bc_def['coronary'][bc['Pim']][:, 1]
 
-            p_v_time = bc_def['coronary'][bc['Pim']][:, 0]
-            p_v_pres = bc_def['coronary'][bc['Pim']][:, 1]
-            p_v = get_in_model_units(params['sim_units'], 'P', p_v_pres)
-
-            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_time, p_v)).T)
-
+            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_t, p_v_p)).T)
 
     return res_bc
 

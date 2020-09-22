@@ -14,7 +14,6 @@ import numpy as np
 from get_database import Database, SimVascular, Post, input_args
 from get_sv_project import write_bc, write_inflow
 from simulation_io import read_results_1d, get_caps_db
-from get_bcs import get_in_model_units
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
@@ -57,18 +56,14 @@ def get_params(db, geo):
         raise RuntimeError('centerline does not exist')
 
     # get boundary conditions
-    params['bc_def'], params['bc_params'] = db.get_bcs(geo)
-    params['bc_type'], _ = db.get_bc_type(geo)
+    params['bc_def'] = db.get_bcs(geo)
+    if params['bc_def'] is None:
+        raise RuntimeError('no boundary conditions')
 
     # write outlet boundary conditions to file if they exist
     params['bc_types'], err = write_bc(params['fpath_1d'], db, geo, model='1d')
     if err:
         raise RuntimeError(err)
-
-    # get simulation constants
-    params['constants'] = db.get_constants(geo)
-    if params['constants'] is None:
-        raise RuntimeError('boundary conditions do not exist')
 
     # get inflow
     time, _ = db.get_inflow_smooth(geo)
@@ -102,7 +97,6 @@ def get_params(db, geo):
     # run all cycles
     params['num_dts'] = int(time[-1] * params['n_cycle'] / params['dt'] + 1.0)
 
-    pdb.set_trace()
     return params
 
 
@@ -140,27 +134,14 @@ def generate_1d_api(db, geo):
 
     # add outlets
     for cp in params_db['outlets']:
-        t = params_db['bc_type'][cp]
+        t = params_db['bc_def']['bc_type'][cp]
         bc = params_db['bc_def']['bc'][cp]
+        if 'Po' in bc and bc['Po'] != 0.0:
+            raise ValueError('RCR reference pressure not implemented')
         if t == 'rcr':
-            rcr_rp = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['Rp'])
-            rcr_c = get_in_model_units(params_db['bc_params']['sim_units'], 'C', bc['C'])
-            rcr_pd = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['Rd'])
-            if 'Po' in bc:
-                raise ValueError('RCR reference pressure not implemented')
-                # rcr_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-            # else:
-            #     rcr_po = 0.0
-            print(cp, bc)
-            bcs.add_rcr(face_name=cp, Rp=rcr_rp, C=rcr_c, Rd=rcr_pd)
+            bcs.add_rcr(face_name=cp, Rp=bc['Rp'], C=bc['C'], Rd=bc['Rd'])
         elif t == 'resistance':
-            r_res = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['R'])
-            if 'Po' in bc:
-                raise ValueError('Resistance reference pressure not implemented')
-                # r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
-            # else:
-            #     r_po = 0.0
-            bcs.add_resistance(face_name=cp, resistance=r_res)
+            bcs.add_resistance(face_name=cp, resistance=bc['R'])
         elif t == 'coronary':
             raise ValueError('Coronary BC not implemented')
 
@@ -203,7 +184,7 @@ def generate_1d(db, geo):
                  centerlines_output_file=None,
                  compute_centerlines=False,
                  compute_mesh=True,
-                 density=params['constants']['density'],
+                 density=params['bc_def']['params']['sim_density'],
                  element_size=params['element_size'],
                  inlet_face_input_file='inflow.vtp',
                  inflow_input_file=db.get_sv_flow_path(geo, '1d'),
@@ -232,7 +213,7 @@ def generate_1d(db, geo):
                  time_step=params['dt'],
                  uniform_bc=True,
                  units='cm',
-                 viscosity=params['constants']['viscosity'],
+                 viscosity=params['bc_def']['params']['sim_viscosity'],
                  wall_properties_input_file=None,
                  wall_properties_output_file=None,
                  write_mesh_file=True,

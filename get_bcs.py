@@ -94,12 +94,12 @@ def get_in_model_units(s_units, symbol, val):
             return val * np.power(10.0, - sign * 4)
         elif symbol == 'P':
             return val * np.power(10.0, sign * 1)
-        elif symbol == 'density':
+        elif 'density' in symbol:
             return val * np.power(10.0, sign * 3)
-        elif symbol == 'viscosity':
+        elif 'viscosity' in symbol:
             return val * np.power(10.0, sign * 1)
         else:
-            raise ValueError('Unknown boundary condition symbol ' + name)
+            raise ValueError('Unknown boundary condition symbol ' + symbol)
 
 
 def get_flow_coronary(r):
@@ -136,19 +136,65 @@ def get_bcs(tcl, tcl_bc):
     sim_preid = read_array(r_bc, 'sim_preid')
     sim_spname = read_array(r_bc, 'sim_spname', False)
 
+    # get parameters
+    params = get_params(tcl)
+
+    # get boundary condition types
+    sim_bc_type = get_bc_type(sim_bc)
+
+    # convert boundary condition parameters to sim units
+    for cp, bc in sim_bc.items():
+        if is_outlet(cp):
+            # add zero reference pressure if not defined
+            if sim_bc_type[cp] in ('rcr', 'resistance') and 'Po' not in bc:
+                sim_bc[cp]['Po'] = 0.0
+            for p, v in bc.items():
+                sim_bc[cp][p] = get_in_model_units(params['sim_units'], p[0], v)
+
     # extract pressure over time in case of coronary boundary conditions
     coronary = {}
     for bc in sim_bc.values():
         if 'COR' in bc.keys():
             coronary = get_flow_coronary(r_bc)
-            break
+            for cp, v in coronary.items():
+                coronary[cp][:, 1] = get_in_model_units(params['sim_units'], 'P', v[:, 1])
 
-    bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname, 'coronary': coronary}
+    # convert model parameters to sim units
+    for p, v in params.items():
+        if p in ('sim_density', 'sim_viscosity'):
+            params[p] = get_in_model_units(params['sim_units'], p, float(v))
+
+    bcs = {'bc': sim_bc, 'spid': sim_spid, 'preid': sim_preid, 'spname': sim_spname, 'coronary': coronary,
+           'params': params, 'bc_type': sim_bc_type}
 
     # close window
     r_bc.destroy()
 
-    return bcs, get_params(tcl)
+    return bcs
+
+
+def get_bc_type(bc_def):
+    bc_type = {}
+    for s, bc in bc_def.items():
+        if not is_outlet(s):
+            continue
+        if 'Rp' in bc and 'C' in bc and 'Rd' in bc:
+            bc_type[s] = 'rcr'
+        elif 'R' in bc and 'Po' in bc:
+            bc_type[s] = 'resistance'
+        elif 'COR' in bc:
+            bc_type[s] = 'coronary'
+        else:
+            raise RuntimeError('boundary conditions not implemented')
+
+    return bc_type
+
+
+def is_outlet(s):
+    if 'wall' in s or 'inflow' in s or 'stent' in s:
+        return False
+    else:
+        return True
 
 
 def get_params(tcl):

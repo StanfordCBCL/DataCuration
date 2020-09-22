@@ -37,18 +37,9 @@ def main():
             publish = 'no'
         properties[geo]['publish'] = publish
 
-    # check if boundary conditions exist
-    for geo in geometries:
-        _, err = db.get_bc_type(geo)
-        if not err:
-            bc = 'yes'
-        else:
-            bc = 'no'
-        properties[geo]['has_bcs'] = bc
-
     # get inflow type
     for geo in geometries:
-        bc_def, params = db.get_bcs(geo)
+        bc_def = db.get_bcs(geo)
         if bc_def is None:
             inflow = 'none'
         else:
