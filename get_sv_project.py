@@ -88,6 +88,7 @@ def get_sv_opt(db, geo, mode=''):
            'num_solve': '1',
            'num_time': str(int(n_cycle * numstep + nt_out)),
            'num_restart': '1',#str(nt_out),
+           'n_cycle': n_cycle,
            'bool_surf_stress': 'True',
            'coupling': 'Implicit',
            'print_avg_sol': 'True',
@@ -870,6 +871,7 @@ def create_sv_project(db, geo):
 
     # if True:
     try:
+        print('Estimated cycles: ' + str(get_sv_opt(db, geo)['n_cycle']))
         make_folders(db, geo)
         write_inflow(db, geo, '3d')
         copy_files(db, geo)
