@@ -8,7 +8,7 @@
 import sys, timeit
 from numpy import abs, array, ones, ravel, squeeze, sum, zeros
 import numpy as np
-from scipy.misc import factorial
+from scipy.special import factorial
 from scipy import sparse
 from scipy.sparse.linalg import spsolve, splu
 
