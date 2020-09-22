@@ -151,6 +151,7 @@ def compare_0d(db, geo, res, time, m):
 
             res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_time, p_v)).T)
 
+
     return res_bc
 
 
@@ -182,6 +183,9 @@ def check_bc(db, geo, plot_rerun=True):
     # get 0d results
     res_0d = compare_0d(db, geo, res, time, m)
 
+    # save pressure curves
+    np.save(db.get_bc_0D_path(geo), res_0d)
+
     # get outlets
     caps = get_caps_db(db, geo)
     outlets = {}
@@ -202,7 +206,6 @@ def check_bc(db, geo, plot_rerun=True):
     fig, ax = plt.subplots(1, len(outlets), figsize=(len(outlets) * 3 + 4, 6), dpi=dpi, sharey=True)
     f = 'pressure'
 
-    res_bc = defaultdict(dict)
     errors = []
     for j, (cp, br) in enumerate(outlets.items()):
         t = bc_type[cp]
@@ -228,10 +231,6 @@ def check_bc(db, geo, plot_rerun=True):
         err = np.mean(np.abs(diff)) / np.mean(res[br]['pressure'][m + '_cap'])
         errors += [err]
 
-        # save to file
-        res_bc['time'] = res_0d[br]['t']
-        res_bc['pressure'][br] = res_0d[br]['p']
-
     max_err = np.max(errors) * 100
     max_outlet = db.get_cap_names(geo)[list(outlets.keys())[np.argmax(errors)]]
 
@@ -245,9 +244,6 @@ def check_bc(db, geo, plot_rerun=True):
         f_out = db.get_bc_comparison_path(geo)
     fig.savefig(f_out, bbox_inches='tight')
     plt.close(fig)
-
-    # save pressure curves
-    np.save(db.get_bc_0D_path(geo), res_bc)
 
     # add error to log
     if m == '3d':
