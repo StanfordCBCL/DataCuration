@@ -162,11 +162,50 @@ class Database:
             geometries = ['0080_0001', '0082_0001', '0083_2002', '0084_1001', '0088_1001', '0112_1001', '0134_0002']
         elif name == 'fix_surf_orientation':
             geometries = ['0069_0001']
+        elif name == 'fix_coarse_inflow':
+            geometries = ['0078_0001', '0079_0001', '0080_0001', '0108_0001', '0166_0001', '0167_0001', '0172_0001',
+                          '0184_0001']
         elif name == 'bifurcation_outlet':
             geometries = ['0080_0001', '0082_0001', '0083_2002', '0084_1001', '0088_1001', '0112_1001', '0134_0002']
         elif name == 'bifurcation_inlet':
             geometries = ['0065_1001', '0076_1001', '0081_0001', '0081_1001', '0086_0001', '0086_1001', '0089_1001',
                           '0148_1001', '0155_0001', '0162_3001']
+        elif name == 'for_aekaansh':
+            geometries = ['0172_0001', '0173_1001', '0183_1002', '0187_0002']
+        elif name == 'rerun':
+            geometries = ['0002_0001', '0003_0001', '0006_0001', '0063_0001', '0063_1001', '0064_0001', '0064_1001',
+                          '0065_0001', '0065_1001', '0075_0001', '0076_0001', '0076_1001', '0077_0001', '0077_1001',
+                          '0078_0001', '0080_0001', '0081_0001', '0082_0001', '0086_0001', '0090_0001', '0091_0001',
+                          '0092_0001', '0093_0001', '0094_0001', '0095_0001', '0096_0001', '0097_0001', '0098_0001',
+                          '0099_0001', '0101_0001', '0102_0001', '0103_0001', '0104_0001', '0105_0001', '0106_0001',
+                          '0107_0001', '0108_0001', '0111_0001', '0118_1000', '0125_0001', '0126_0001', '0129_0000',
+                          '0130_0000', '0131_0000', '0134_0002', '0138_1001', '0139_1001', '0140_2001', '0141_1001',
+                          '0144_1001', '0145_1001', '0146_1001', '0148_1001', '0149_1001', '0151_0001', '0154_0001',
+                          '0155_0001', '0156_0001', '0160_6001', '0161_0001', '0162_3001', '0163_0001', '0166_0001',
+                          '0167_0001', '0172_0001', '0173_1001', '0174_0000', '0176_0000', '0183_1002', '0184_0001',
+                          '0185_0001', '0186_0002', '0187_0002', '0188_0001', '0189_0001']
+        elif name == 'rerun_all':
+            geometries = ['0001_0001', '0002_0001', '0003_0001', '0006_0001', '0063_0001', '0063_1001', '0064_0001',
+                          '0064_1001', '0065_0001', '0065_1001', '0066_0001', '0067_0001', '0068_0001', '0069_0001',
+                          '0070_0001', '0071_0001', '0072_0001', '0073_0001', '0074_0001', '0075_0001', '0075_1001',
+                          '0076_0001', '0076_1001', '0077_0001', '0077_1001', '0078_0001', '0079_0001', '0080_0001',
+                          '0081_0001', '0082_0001', '0083_2002', '0086_0001', '0088_1001', '0089_1001', '0090_0001',
+                          '0091_0001', '0092_0001', '0093_0001', '0094_0001', '0095_0001', '0096_0001', '0097_0001',
+                          '0098_0001', '0099_0001', '0101_0001', '0102_0001', '0103_0001', '0104_0001', '0105_0001',
+                          '0106_0001', '0107_0001', '0108_0001', '0110_0001', '0111_0001', '0112_1001', '0118_1000',
+                          '0125_0001', '0126_0001', '0129_0000', '0130_0000', '0131_0000', '0134_0002', '0138_1001',
+                          '0139_1001', '0140_2001', '0141_1001', '0142_1001', '0144_1001', '0145_1001', '0146_1001',
+                          '0147_1001', '0148_1001', '0149_1001', '0150_0001', '0151_0001', '0154_0001', '0155_0001',
+                          '0156_0001', '0157_0000', '0160_6001', '0161_0001', '0162_3001', '0163_0001', '0165_0001',
+                          '0166_0001', '0167_0001', '0172_0001', '0173_1001', '0174_0000', '0175_0000', '0176_0000',
+                          '0183_1002', '0184_0001', '0185_0001', '0186_0002', '0187_0002', '0188_0001', '0189_0001']
+        elif name == 'inflow_oscillation':
+            geometries = ['0176_0000', '0162_3001', '0161_0001', '0154_0001', '0148_1001', '0144_1001', '0138_1001',
+                          '0106_0001', '0077_1001', '0063_1001']
+        elif name == 'inflow_nan':
+            geometries = ['0174_0000', '0163_0001', '0160_6001', '0156_0001', '0155_0001', '0151_0001', '0149_0001',
+                          '0146_1001', '0141_1001', '0139_1001', '0131_0000', '0129_0000', '0111_0001', '0065_1001',
+                          '0064_1001', '0006_0001']
         elif name == 'resistance':
             geometries = []
             for geo in self.get_geometries():
@@ -190,12 +229,6 @@ class Database:
 
                 print(get_in_model_units(params['sim_units'], 'viscosity', float(params['sim_viscosity'])))
             sys.exit(1)
-        elif name == 'coronary':
-            geometries = []
-            for geo in self.get_geometries():
-                bc_type, err = self.get_bc_type(geo)
-                if bc_type is not None and 'coronary' in bc_type.values():
-                    geometries += [geo]
         elif name in ['aorta', 'aortofemoral', 'pulmonary', 'cerebrovascular', 'coronary']:
             geometries = []
             for geo in self.get_geometries():
@@ -290,6 +323,9 @@ class Database:
     def get_3d_flow_rerun(self, geo):
         return self.gen_file('3d_flow', geo, 'vtp')
 
+    def get_3d_flow_rerun_bc(self, geo):
+        return self.gen_file('3d_flow', geo + '_bc')
+
     def get_sv_flow_path(self, geo, model):
         return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['flow'], 'inflow_' + model + '.flow')
 
@@ -327,8 +363,22 @@ class Database:
     def get_initial_conditions(self, geo):
         return os.path.join(self.get_sv_meshes(geo), 'initial.vtu')
 
+    def get_initial_conditions_pressure(self, geo):
+        # return os.path.join(self.get_sv_meshes(geo), 'initial_pressure.vtu')
+        return os.path.join(self.fpath_gen, 'initial_pressure', geo + '.vtu')
+
+    def get_initial_conditions_steady(self, geo):
+        # return os.path.join(self.get_sv_meshes(geo), 'initial_pressure.vtu')
+        return os.path.join(self.fpath_gen, 'steady', geo + '.vtu')
+
     def get_sv_initial_conditions(self, geo):
         return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['simulations'], geo, 'mesh-complete', 'initial.vtu')
+
+    def get_bc_comparison_path(self, geo):
+        return os.path.join(self.fpath_gen, 'bcs', geo + '.png')
+
+    def get_bc_0D_path(self, geo):
+        return os.path.join(self.fpath_gen, 'bcs', geo + '.npy')
 
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
@@ -342,11 +392,17 @@ class Database:
     def get_0d_flow_path(self, geo):
         return self.gen_file('0d_flow', geo)
 
+    def get_0d_flow_path_vtp(self, geo):
+        return self.gen_file('0d_flow', geo, 'vtp')
+
     def get_1d_flow_path(self, geo):
         return self.gen_file('1d_flow', geo)
 
     def get_1d_flow_path_xdmf(self, geo):
         return self.gen_file('1d_flow', geo, 'xdmf')
+
+    def get_1d_flow_path_vtp(self, geo):
+        return self.gen_file('1d_flow', geo, 'vtp')
 
     def get_post_path(self, geo, name):
         return self.gen_file('1d_3d_comparison', geo + '_' + name, 'png')
@@ -415,8 +471,14 @@ class Database:
     def get_log_file_1d(self):
         return os.path.join(self.fpath_solve, 'log_1d.npy')
 
+    def get_bc_err_file(self):
+        return os.path.join(self.fpath_gen, 'bc_err.npy')
+
     def add_log_file_1d(self, geo, log):
         self.add_dict(self.get_log_file_1d(), geo, log)
+
+    def add_bc_err(self, geo, log):
+        self.add_dict(self.get_bc_err_file(), geo, log)
 
     def get_1d_3d_comparison(self):
         return os.path.join(os.path.dirname(self.get_post_path('', '')), '1d_3d_comparison.npy')
@@ -579,10 +641,10 @@ class Database:
         return os.path.join(self.get_sv_meshes(geo), geo + '.vtu')
 
     def get_res_3d_vol_rerun(self, geo):
-        return os.path.join(self.fpath_study, '3d_flow', geo + '.vtu')
+        return os.path.join(self.fpath_study, 'simulation', geo + '.vtu')
 
     def get_res_3d_surf_rerun(self, geo):
-        return os.path.join(self.fpath_study, '3d_flow', geo + '.vtp')
+        return os.path.join(self.fpath_study, 'simulation', geo + '.vtp')
 
     def get_outlet_names(self, geo):
         bc_def, _ = self.get_bcs(geo)
@@ -741,8 +803,8 @@ class Post:
     def __init__(self):
         self.fields = ['pressure', 'flow', 'area']
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
-        self.styles = {'3d': '-', '3d_rerun': '-', '1d': '-', '0d': ':'}
-        self.colors = {'3d': 'C0', '3d_rerun': 'C1', '1d': 'C1', 'r': 'C2'}
+        self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-', '0d': ':'}
+        self.colors = {'3d': 'C0', '3d_rerun': 'C1', '3d_rerun_bc': 'C1', '1d': 'C1', 'r': 'C2'}
 
         self.cgs2mmhg = 7.50062e-4
         self.mlps2lph = 60 / 1000
@@ -751,6 +813,7 @@ class Post:
         # sets the plot order
         self.models = ['3d', '1d']
         # self.models = ['3d', '3d_rerun']
+        # self.models = ['3d', '3d_rerun_bc']
 
 
 def run_command(run_folder, command):
