@@ -4,6 +4,7 @@ import os
 import numpy as np
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
+from tqdm import tqdm
 
 from get_bc_integrals import get_res_names
 from get_database import input_args
@@ -93,11 +94,7 @@ def extract_results(fpath_1d, fpath_3d, fpath_out, only_caps=False):
     eps_norm = 1.0e-3
 
     # integrate results on all points of intergration cells
-    for i in range(reader_1d.GetNumberOfPoints()):
-        # print progress
-        if (i + 1) % (reader_1d.GetNumberOfPoints() // 10) == 0:
-            print('  ' + str((i + 2) * 100 // reader_1d.GetNumberOfPoints()) + '%')
-
+    for i in tqdm(range(reader_1d.GetNumberOfPoints())):
         # check if point is cap
         reader_1d.GetPointCells(i, ids)
         if ids.GetNumberOfIds() == 1:
