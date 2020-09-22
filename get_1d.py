@@ -13,7 +13,8 @@ import numpy as np
 
 from get_database import Database, SimVascular, Post, input_args
 from get_sv_project import write_bc, write_inflow
-from simulation_io import read_results_1d
+from simulation_io import read_results_1d, get_caps_db
+from get_bcs import get_in_model_units
 
 sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
 
@@ -21,14 +22,16 @@ import sv_1d_simulation as oned
 
 
 def get_params(db, geo):
-    fpath_1d = db.get_solve_dir_1d(geo)
-    fpath_geo = os.path.join(fpath_1d, 'geometry')
-
     # store parameters for export
     params = {}
+    
+    params['fpath_1d'] = db.get_solve_dir_1d(geo)
+    fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
 
+    # reference pressure (= initial pressure?)
     if os.path.exists(db.get_bc_flow_path(geo)):
         res_3d = db.read_results(db.get_bc_flow_path(geo))
+        params['pref'] = res_3d['pressure'][-1, 0]
     else:
         raise RuntimeError('3d results do not exist')
 
@@ -49,12 +52,16 @@ def get_params(db, geo):
         raise RuntimeError('3d geometry has multiple inlets (' + repr(n_inlet) + ')')
 
     # assume pre-computed centerlines from SimVascular C++
-    centerlines_input_file = db.get_centerline_path(geo)
-    if not os.path.exists(centerlines_input_file):
+    params['centerlines_input_file'] = db.get_centerline_path(geo)
+    if not os.path.exists(params['centerlines_input_file']):
         raise RuntimeError('centerline does not exist')
 
+    # get boundary conditions
+    params['bc_def'], params['bc_params'] = db.get_bcs(geo)
+    params['bc_type'], _ = db.get_bc_type(geo)
+
     # write outlet boundary conditions to file if they exist
-    params['bc_types'], err = write_bc(fpath_1d, db, geo, model='1d')
+    params['bc_types'], err = write_bc(params['fpath_1d'], db, geo, model='1d')
     if err:
         raise RuntimeError(err)
 
@@ -67,6 +74,12 @@ def get_params(db, geo):
     time, _ = db.get_inflow_smooth(geo)
     if time is None:
         raise RuntimeError('inflow does not exist')
+    params['inflow_input_file'] = db.get_sv_flow_path(geo, '1d')
+
+    # get outlets
+    caps = get_caps_db(db, geo)
+    del caps['inflow']
+    params['outlets'] = list(caps.keys())
 
     # number of cycles to run
     params['n_cycle'] = 50
@@ -84,15 +97,84 @@ def get_params(db, geo):
 
     # set simulation time as end of 3d simulation
     params['save_data_freq'] = 1
-    params['dt'] = 1e-3
-
-    # reference pressure (= initial pressure?)
-    params['pref'] = res_3d['pressure'][-1, 0]
+    params['dt'] = 1.0e-3
 
     # run all cycles
     params['num_dts'] = int(time[-1] * params['n_cycle'] / params['dt'] + 1.0)
 
+    pdb.set_trace()
     return params
+
+
+def generate_1d_api(db, geo):
+    # get parameters
+    params_db = get_params(db, geo)
+
+    # create 1d simulation
+    oned_simulation = sv.simulation.OneDimensional()
+
+    # Create 1D simulation parameters
+    params = sv.simulation.OneDimensionalParameters()
+
+    # Mesh parameters
+    mesh_params = params.MeshParameters()
+
+    # Model parameters
+    model_params = params.ModelParameters()
+    model_params.name = geo
+    model_params.inlet_face_names = ['inflow']
+    model_params.outlet_face_names = params_db['outlets']
+    model_params.centerlines_file_name = params_db['centerlines_input_file']
+
+    # Fluid properties
+    fluid_props = params.FluidProperties()
+
+    # Set wall properties
+    material = params.WallProperties.OlufsenMaterial()
+
+    # Set boundary conditions
+    bcs = params.BoundaryConditions()
+
+    # add inlet
+    bcs.add_velocities(face_name='inlet', file_name=params_db['inflow_input_file'])
+
+    # add outlets
+    for cp in params_db['outlets']:
+        t = params_db['bc_type'][cp]
+        bc = params_db['bc_def']['bc'][cp]
+        if t == 'rcr':
+            rcr_rp = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['Rp'])
+            rcr_c = get_in_model_units(params_db['bc_params']['sim_units'], 'C', bc['C'])
+            rcr_pd = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['Rd'])
+            if 'Po' in bc:
+                raise ValueError('RCR reference pressure not implemented')
+                # rcr_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
+            # else:
+            #     rcr_po = 0.0
+            print(cp, bc)
+            bcs.add_rcr(face_name=cp, Rp=rcr_rp, C=rcr_c, Rd=rcr_pd)
+        elif t == 'resistance':
+            r_res = get_in_model_units(params_db['bc_params']['sim_units'], 'R', bc['R'])
+            if 'Po' in bc:
+                raise ValueError('Resistance reference pressure not implemented')
+                # r_po = get_in_model_units(params['sim_units'], 'P', bc['Po'])
+            # else:
+            #     r_po = 0.0
+            bcs.add_resistance(face_name=cp, resistance=r_res)
+        elif t == 'coronary':
+            raise ValueError('Coronary BC not implemented')
+
+    # Set solution parameters
+    solution_params = params.Solution()
+    solution_params.time_step = params_db['dt']
+    solution_params.num_time_steps = params_db['num_dts']
+    solution_params.save_frequency = params_db['save_data_freq']
+
+    # Write a 1D solver input file
+    oned_simulation.write_input_file(model=model_params, mesh=mesh_params, fluid=fluid_props,
+                                     material=material, boundary_conditions=bcs, solution=solution_params,
+                                     directory=params_db['fpath_1d'])
+    return None
 
 
 def generate_1d(db, geo):
@@ -100,19 +182,15 @@ def generate_1d(db, geo):
     params = get_params(db, geo)
 
     # set simulation paths
-    fpath_1d = db.get_solve_dir_1d(geo)
-    fpath_geo = os.path.join(fpath_1d, 'geometry')
+    fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
     fpath_surf = os.path.join(fpath_geo, 'surfaces')
-
-    # assume pre-computed centerlines from SimVascular C++ (don't use python vmtk interfance)
-    centerlines_input_file = db.get_centerline_path(geo)
 
     # copy outlet surfaces
     for f in db.get_surfaces(geo, 'caps'):
         shutil.copy2(f, fpath_surf)
 
     # copy outlet names
-    fpath_outlets = os.path.join(fpath_1d, 'outlets')
+    fpath_outlets = os.path.join(params['fpath_1d'], 'outlets')
     shutil.copy(db.get_centerline_outlet_path(geo), fpath_outlets)
 
     # write inflow
@@ -121,7 +199,7 @@ def generate_1d(db, geo):
     # try:
     if True:
         oned.run(boundary_surfaces_directory=fpath_surf,
-                 centerlines_input_file=centerlines_input_file,
+                 centerlines_input_file=params['centerlines_input_file'],
                  centerlines_output_file=None,
                  compute_centerlines=False,
                  compute_mesh=True,
@@ -141,10 +219,10 @@ def generate_1d(db, geo):
                  olufsen_material_k3=None,
                  olufsen_material_exp=2.0,
                  olufsen_material_pressure=params['pref'],
-                 outflow_bc_input_file=fpath_1d,
+                 outflow_bc_input_file=params['fpath_1d'],
                  outflow_bc_type=params['bc_types'],
                  outlet_face_names_input_file=fpath_outlets,
-                 output_directory=fpath_1d,
+                 output_directory=params['fpath_1d'],
                  seg_min_num=params['seg_min_num'],
                  seg_size=params['seg_size'],
                  seg_size_adaptive=params['seg_size_adaptive'],
@@ -177,14 +255,15 @@ def main(db, geometries):
         #     continue
 
         # generate oneDSolver input file and check if successful
-        msg = generate_1d(db, geo)
-        # msg = generate_1d_api(db, geo)
+        # msg = generate_1d(db, geo)
+        msg = generate_1d_api(db, geo)
 
         # msg = None
         # if False:
         if not msg:
             # run oneDSolver
-            sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
+            sv.run_solver_1d(db.get_solve_dir_1d(geo), 'solver.in')
             # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
             #     f.write(out_solve)
 
