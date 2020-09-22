@@ -43,10 +43,19 @@ def get_last_result(fpath):
     return res[get_last_timestep(res, 'pressure')], res[get_last_timestep(res, 'velocity')]
 
 
-def get_initial_conditions(db, geo, ini_pres='1d', ini_velo='steady'):
+def get_initial_conditions(db, geo):
     """
     Generate initial conditions from database for pressure and velocity
     """
+    # get best available initial conditions
+    if os.path.exists(db.get_initial_conditions_pressure(geo)):
+        print('  using pressure ROM initial conditions')
+        ini_pres = '1d'
+    else:
+        print('  using pressure OSMSC initial conditions')
+        ini_pres = 'osmsc'
+    ini_velo = 'osmsc'
+
     # load steady state results
     if ini_pres == 'steady' or ini_velo == 'steady':
         p0_steady, u0_steady = get_last_result(db.get_initial_conditions_steady(geo))
@@ -91,8 +100,6 @@ def get_vol(db, geo):
     if not os.path.exists(f_vol):
         print('  no volume mesh')
         return
-
-    print('  generating volume mesh')
 
     # read volume mesh
     vol = read_geo(f_vol).GetOutput()
@@ -159,8 +166,6 @@ def get_surf(db, geo):
             name = 'walls_combined.vtp'
         else:
             name = os.path.join('caps', name_osmsc)
-
-        print('  generating surface mesh ' + name)
 
         f_out = os.path.join(db.get_sv_meshes(geo), name)
 
