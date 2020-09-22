@@ -308,13 +308,16 @@ def check_inflow(db, geo):
     plt.plot(time, inflow * post.convert['flow'], 'kx')
     plt.xlabel('Time [s]')
     plt.ylabel('Flow [l/h]')
+    plt.title('Initial pressure ' + '{:2.1f}'.format(ini['pressure'][0][-1] * post.convert['pressure']) + ' mmHg')
     plt.grid()
     ax.legend(['Optimized for rerun', 'SimVascular', 'Initial condition for rerun', 'OSMSC'])
     fig.savefig(f_out_fig, bbox_inches='tight')
     plt.cla()
 
 
-def compare_inflows(db, geo):
+def fix_inflows(db, geo):
+    plot = False
+
     t1, f1 = db.get_inflow(geo)
     if t1 is None:
         return
@@ -327,9 +330,15 @@ def compare_inflows(db, geo):
         geo_in = geo
     t2, f2 = db.get_inflow_osmsc(geo_in)
 
-    # minimize difference between inflows by shifting in time
-    dt = optimize_phase(t1, f1, t2, f2)
-    f2 = phase_shift(t2, f2, dt)
+    if len(t2) - 1 == len(t1):
+        # optimize an inflow profile
+        print('  only coarse inflow available')
+        t2, f2 = optimize_inflow(t1, f1)
+        plot = True
+    else:
+        # minimize difference between inflows by shifting in time
+        dt = optimize_phase(t1, f1, t2, f2)
+        f2 = phase_shift(t2, f2, dt)
 
     # interpolate to coarse time steps
     f12 = interp1d(t2, f2)(t1)
@@ -343,12 +352,13 @@ def compare_inflows(db, geo):
     # error between flow profiles
     err = np.max(np.abs(f1 - f12)) / np.abs(np.mean(f1))
 
+    print(geo, "{:.2e}".format(err))
+
     # save
     if err < 0.1:
         np.savetxt(db.get_inflow_smooth_path(geo), np.vstack((t2, f2)).T)
 
-    print(geo, "{:.2e}".format(err))
-    if True:
+    if plot:
         fig, ax = plt.subplots(dpi=300, figsize=(12, 6))
         post = Post()
         plt.plot(t1, f1 * post.convert['flow'], 'k-')
@@ -361,13 +371,14 @@ def compare_inflows(db, geo):
         fig.savefig(f_out, bbox_inches='tight')
         plt.close(fig)
 
+    return False
+
 
 def main(db, geometries):
     for geo in geometries:
         # print('Checking geometry ' + geo)
         # check_inflow(db, geo)
-        compare_inflows(db, geo)
-
+        fix_inflows(db, geo)
 
 if __name__ == '__main__':
     descr = 'Check inlet flow of 3d simulation'
