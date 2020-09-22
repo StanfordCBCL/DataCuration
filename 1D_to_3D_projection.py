@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+
+import pdb
 import sys
 import os
 import vtk
@@ -10,6 +13,8 @@ from collections import defaultdict
 from tqdm import tqdm
 import pickle
 import math
+
+from get_database import input_args, Database, Post, SimVascular
 
 # Read a vtp file and return the polydata
 def read_polydata(filename, datatype=None):
@@ -438,7 +443,7 @@ def addPropertiesFromDict(mesh,dict):
                         data.SetNumberOfComponents(1)
                     else:
                         data.SetNumberOfComponents(len(property_dict[array_name]))
-                    data.SetNumberOfTuples(mesh.GetNumberOfPoints())
+                    data.SetNumberOfValues(mesh.GetNumberOfPoints() * len(property_dict[array_name]))
                     data.Fill(-1)
                     mesh.GetPointData().AddArray(data)
                     print(array_name + ' data array added to mesh.')
@@ -453,11 +458,12 @@ def createParser():
     parser = argparse.ArgumentParser(description='Maps diameter from given centerline to the surface of a given 3D model.')
     parser.add_argument('centerline', type=str, help='the centerline to map diameters from')
     parser.add_argument('mesh', type=str, help='the mesh to map onto')
+    parser.add_argument('out', type=str, help='output mesh')
     parser.add_argument('-f','-file', type=str, nargs='?', default = None, help='the pickle filename with data')
     parser.add_argument('-v', '-verbose', type=int, nargs='?', const=1, default=0, help='turn on verbosity')
     return parser
 
-def main(args):
+def run(args):
     mesh = read_polydata(args.mesh)
     centerline = read_polydata(args.centerline)
     cleaner = vtk.vtkCleanPolyData()
@@ -521,16 +527,57 @@ def main(args):
         write_polydata(mesh,os.path.basename(args.mesh).split('.')[0]+'_mapped.'+os.path.basename(args.mesh).split('.')[1])
         graph = generateGraph(mesh)
         mesh = multipleSourceDistance(mesh,graph,-1,seed_pts,distances,properties)
-        f = open("file.pkl","wb")
+        f = open(os.path.splitext(args.out)[0] + ".pkl","wb")
         pickle.dump(graph.node_properties,f)
         f.close()
 
-    f = open("file.pkl","rb")
+    mesh = read_polydata(args.mesh)
+    f = open(os.path.splitext(args.out)[0] + ".pkl","rb")
     props = pickle.load(f)
     mesh = addPropertiesFromDict(mesh,props)
-    write_polydata(mesh,os.path.basename(args.mesh).split('.')[0]+'_mapped_filled.'+os.path.basename(args.mesh).split('.')[1])
+    write_polydata(mesh,args.out)
+
+
+def main(db, geometries):
+    for geo in geometries:
+        # get file paths
+        f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
+        f_0d = db.get_0d_flow_path_vtp(geo)
+        f_1d = db.get_1d_flow_path_vtp(geo)
+        f_out = db.get_initial_conditions_pressure(geo)
+        f_pkl = os.path.splitext(db.get_initial_conditions_pressure(geo))[0] + '.pkl'
+
+        if os.path.exists(f_out):
+            print(geo + ' done!')
+            continue
+
+        # select reduced order model
+        if os.path.exists(f_1d):
+            print(geo + ' using 1d')
+            f_red = f_1d
+        elif os.path.exists(f_0d):
+            print(geo + ' using 0d')
+            f_red = f_0d
+        else:
+            print(geo + ' no 0d/1d solution found')
+            continue
+
+        # set parameters
+        args = type('', (), {})()
+        args.centerline = f_red
+        args.mesh = f_vol
+        args.out = f_out
+        args.v = 0
+        if os.path.exists(f_pkl):
+            args.f = f_pkl
+        else:
+            args.f = None
+
+        # run projection
+        run(args)
+
 
 if __name__ == '__main__':
-    parser = createParser()
-    args = parser.parse_args()
-    main(args)
+    descr = 'Check RCR boundary condition of 3d simulation'
+    d, g, _ = input_args(descr)
+    main(d, g)
