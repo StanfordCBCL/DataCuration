@@ -347,11 +347,11 @@ class Database:
     def get_sv_initial_conditions(self, geo):
         return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['simulations'], geo, 'mesh-complete', 'initial.vtu')
 
-    def get_bc_comparison_path(self, geo):
-        return os.path.join(self.fpath_gen, 'bcs', geo + '.png')
+    def get_bc_comparison_path(self, geo, m):
+        return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.png')
 
-    def get_bc_0D_path(self, geo):
-        return os.path.join(self.fpath_gen, 'bcs', geo + '.npy')
+    def get_bc_0D_path(self, geo, m):
+        return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.npy')
 
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
@@ -444,14 +444,14 @@ class Database:
     def get_log_file_1d(self):
         return os.path.join(self.fpath_solve, 'log_1d.npy')
 
-    def get_bc_err_file(self):
-        return os.path.join(self.fpath_gen, 'bc_err.npy')
+    def get_bc_err_file(self, m):
+        return os.path.join(self.fpath_gen, 'bc_err_' + m + '.npy')
 
     def add_log_file_1d(self, geo, log):
         self.add_dict(self.get_log_file_1d(), geo, log)
 
-    def add_bc_err(self, geo, log):
-        self.add_dict(self.get_bc_err_file(), geo, log)
+    def add_bc_err(self, geo, m, log):
+        self.add_dict(self.get_bc_err_file(m), geo, log)
 
     def get_1d_3d_comparison(self):
         return os.path.join(os.path.dirname(self.get_post_path('', '')), '1d_3d_comparison.npy')
@@ -699,7 +699,7 @@ class SimVascular:
         self.svsolver = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svsolver'
         self.svpost = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpost'
         self.onedsolver = '/home/pfaller/work/repos/svOneDSolver/build_skyline/bin/OneDSolver'
-        self.sv = '/home/pfaller/work/repos/SimVascular/build/SimVascular-build/sv'
+        self.sv = '/home/pfaller/work/repos/SimVascular_fork/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
         self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/bin/simvascular'
@@ -769,8 +769,8 @@ class Post:
         self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
 
         # sets the plot order
-        self.models = ['3d', '1d']
-        # self.models = ['3d', '3d_rerun']
+        # self.models = ['3d', '1d']
+        self.models = ['3d', '3d_rerun']
         # self.models = ['3d', '3d_rerun_bc']
 
 
