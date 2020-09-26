@@ -67,11 +67,8 @@ class Database:
         # study name, if any
         self.study = study
 
-        # folder for tcl files with boundary conditions
-        self.fpath_bc = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/repos_ready_cpm_scripts'
-
-        # self.fpath_need_sim = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/need_sim_cpm_scripts'
-        self.fpath_need_sim = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/released_cpm_scripts'
+        # path to database
+        self.db_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'database')
 
         # folder for simulation files
         self.fpath_sim = '/home/pfaller/work/osmsc/data_uploaded'
@@ -89,19 +86,13 @@ class Database:
         self.fpath_studies = '/home/pfaller/work/osmsc/studies'
 
         # folder containing model images
-        self.fpath_png = '/home/pfaller/work/osmsc/data_png'
-
-        # folder containing images for paper
-        self.img_path = '/home/pfaller/work/osmsc/images'
+        self.fpath_png = os.path.join(self.db_path, 'png')
 
         # folder for simulation studies
         self.fpath_study = os.path.join(self.fpath_studies, self.study)
 
         # folder where simulation is run
         self.fpath_solve = os.path.join(self.fpath_study, 'simulation')
-
-        # derived paths
-        self.fpath_save = os.path.join(self.fpath_gen, 'database', 'database')
 
         # fields to extract
         self.res_fields = ['velocity', 'pressure']
@@ -240,25 +231,20 @@ class Database:
             raise Exception('Unknown selection ' + name)
         return geometries
 
-    def get_params(self, geo):
-        # try to find params in these folders
-        paths = [self.fpath_bc, self.fpath_need_sim]
-        for p in paths:
-            for o in [-1, 0]:
-                tcl, _ = get_tcl_paths(p, geo, o)
-                if os.path.exists(tcl):
-                    return get_params(tcl)
+    def get_bcs_local(self, geo):
+        # folder for tcl files with boundary conditions
+        fpath_bc = '/home/pfaller/work/osmsc/VMR_tcl_repository_scripts/repos_ready_cpm_scripts'
 
-        return None
-
-    def get_bcs(self, geo):
         # try two different offsets of tcl name vs geo name
         # todo: find out why there are several variants
         for o in [-1, 0]:
-            tcl, tcl_bc = get_tcl_paths(self.fpath_bc, geo, o)
+            tcl, tcl_bc = get_tcl_paths(fpath_bc, geo, o)
             if os.path.exists(tcl) and os.path.exists(tcl_bc):
                 return get_bcs(tcl, tcl_bc)
         return None
+
+    def get_bcs(self, geo):
+        return get_dict(os.path.join(self.db_path, 'parameters.npy'))[geo]
 
     def has_loop(self, geo):
         # todo: find automatic way to check for loop
