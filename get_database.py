@@ -35,6 +35,7 @@ def input_args(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('study', help='study name')
     parser.add_argument('-g', '--geo', help='individual geometry or subset name')
+    parser.add_argument('-m', '--mode', help='select mode')
     param = parser.parse_args()
 
     # get model database
