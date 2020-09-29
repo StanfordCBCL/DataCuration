@@ -276,7 +276,7 @@ class Database:
         return os.path.join(self.fpath_gen, 'surfaces_sv', geo + '.vtp')
 
     def get_bc_flow_path(self, geo):
-        return os.path.join(self.fpath_gen, 'bc_flow', geo + '.npy')
+        return os.path.join(self.db_path, 'bc_flow', geo + '.npy')
 
     def get_3d_flow(self, geo):
         return os.path.join(self.fpath_gen, '3d_flow', geo + '.vtp')
@@ -523,7 +523,7 @@ class Database:
         return time, inflow
 
     def get_inflow_smooth_path(self, geo):
-        return os.path.join(self.fpath_gen, 'inflow', geo + '.txt')
+        return os.path.join(self.db_path, 'inflow', geo + '.txt')
 
     def get_inflow_smooth(self, geo):
         f = self.get_inflow_smooth_path(geo)
