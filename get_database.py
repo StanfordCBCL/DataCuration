@@ -88,6 +88,9 @@ class Database:
         # folder containing model images
         self.fpath_png = os.path.join(self.db_path, 'png')
 
+        # file containing simulation parameters
+        self.db_params = os.path.join(self.db_path, 'parameters.npy')
+
         # folder for simulation studies
         self.fpath_study = os.path.join(self.fpath_studies, self.study)
 
@@ -121,9 +124,7 @@ class Database:
         return [g for g in geometries if not self.is_excluded(g)]
 
     def get_geometries(self):
-        geometries = os.listdir(self.fpath_sim)
-        geometries.sort()
-        return geometries
+        return sorted(get_dict(self.db_params).keys())
 
     def get_geometries_select(self, name):
         if name == 'paper':
@@ -244,7 +245,7 @@ class Database:
         return None
 
     def get_bcs(self, geo):
-        return get_dict(os.path.join(self.db_path, 'parameters.npy'))[geo]
+        return get_dict(self.db_params)[geo]
 
     def has_loop(self, geo):
         # todo: find automatic way to check for loop

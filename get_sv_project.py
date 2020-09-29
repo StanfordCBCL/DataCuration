@@ -831,14 +831,16 @@ def check_files(db, geo):
     return True, None
 
 
-def create_sv_project(db, geo):
+def create_sv_project(db, geo, mode=''):
     success, err = check_files(db, geo)
     if not success:
         return err
 
     # if True:
     try:
-        print('Estimated cycles: ' + str(get_sv_opt(db, geo)['n_cycle']))
+        opt = get_sv_opt(db, geo, mode)
+        print('Running geometry ' + geo)
+        print('Estimated cycles: ' + str(opt['n_cycle']))
         make_folders(db, geo)
         write_inflow(db, geo, '3d')
         copy_files(db, geo)
@@ -862,15 +864,18 @@ def create_sv_project(db, geo):
         return e
 
 
-def main(db, geometries):
+def main(db, geometries, params):
     for geo in geometries:
-        print('Running geometry ' + geo)
 
-        err = create_sv_project(db, geo)
+        if params.mode is not None:
+            mode = params.mode
+        else:
+            mode = ''
+        err = create_sv_project(db, geo, mode=mode)
         print('  ' + str(err))
 
 
 if __name__ == '__main__':
     descr = 'Generate an svproject folder'
-    d, g, _ = input_args(descr)
-    main(d, g)
+    d, g, p = input_args(descr)
+    main(d, g, p)
