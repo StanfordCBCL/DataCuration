@@ -6,6 +6,7 @@ import argparse
 import glob
 import numpy as np
 import pdb
+from collections import defaultdict
 
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
@@ -43,50 +44,47 @@ def get_last_result(fpath):
     return res[get_last_timestep(res, 'pressure')], res[get_last_timestep(res, 'velocity')]
 
 
-def get_initial_conditions(db, geo):
+def get_initial_conditions(db, geo, point_data):
     """
     Generate initial conditions from database for pressure and velocity
     """
-    # get best available initial conditions
+    # select best available initial conditions
+    ini = {'velocity': '',
+           'pressure': ''}
+
     if os.path.exists(db.get_initial_conditions_pressure(geo)):
-        print('  using pressure ROM initial conditions')
-        ini_pres = '1d'
+        ini['pressure'] = '1d'
+        ini['velocity'] = '1d'
     else:
-        print('  using pressure OSMSC initial conditions')
-        ini_pres = 'osmsc'
-    ini_velo = 'osmsc'
+        ini['pressure'] = 'osmsc'
+        ini['velocity'] = 'osmsc'
 
-    # load steady state results
-    if ini_pres == 'steady' or ini_velo == 'steady':
-        p0_steady, u0_steady = get_last_result(db.get_initial_conditions_steady(geo))
+    # load initial conditions
+    ini_val = defaultdict(dict)
 
-    # load osmsc results
-    if ini_pres == 'osmsc' or ini_velo == 'osmsc':
-        p0_osmsc, u0_osmsc = get_last_result(db.get_volume(geo))
+    if 'zero' in ini.values():
+        ini_val['pressure']['zero'] = np.zeros(vol.GetNumberOfPoints())
+        ini_val['velocity']['zero'] = 0.0001 * np.ones((vol.GetNumberOfPoints(), 3))
 
-    # initial pressure
-    if ini_pres == 'zero':
-        p0 = np.zeros(vol.GetNumberOfPoints())
-    elif ini_pres == '1d':
-        p0 = v2n(read_geo(db.get_initial_conditions_pressure(geo)).GetOutput().GetPointData().GetArray('pressure'))
-    elif ini_velo == 'steady':
-        p0 = p0_steady
-    elif ini_pres == 'osmsc':
-        p0 = p0_osmsc
-    else:
-        raise ValueError('Unknown pressure initialization ' + ini_pres)
+    if 'steady' in ini.values():
+        ini_val['pressure']['steady'], ini_val['velocity']['steady'] = get_last_result(db.get_initial_conditions_steady(geo))
 
-    # initial velocity
-    if ini_velo == 'zero':
-        u0 = 0.0001 * np.ones((vol.GetNumberOfPoints(), 3))
-    elif ini_velo == 'steady':
-        u0 = u0_steady
-    elif ini_velo == 'osmsc':
-        u0 = u0_osmsc
-    else:
-        raise ValueError('Unknown velocity initialization ' + ini_velo)
+    if 'osmsc' in ini.values():
+        ini_val['pressure']['osmsc'], ini_val['velocity']['osmsc'] = get_last_result(db.get_volume(geo))
 
-    return p0, u0
+    if '1d' in ini.values():
+        data_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput().GetPointData()
+        for f in ini.keys():
+            if data_1d.HasArray(f):
+                ini_val[f]['1d'] = v2n(data_1d.GetArray(f))
+
+    # apply initial conditions
+    for f, i in ini.items():
+        if i not in ini_val[f]:
+            raise ValueError('Unknown ' + f + ' initialization ' + i)
+
+        print('  initial condition ' + f + ': ' + i)
+        point_data[f] = ini_val[f][i]
 
 
 def get_vol(db, geo):
@@ -124,14 +122,14 @@ def get_vol(db, geo):
     cell_data = {'GlobalElementID': np.expand_dims(v2n(vol.GetCellData().GetArray('GlobalElementID')), axis=1)}
 
     # write raw write to file
-    mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
+    mesh = meshio.Mesh(points, [('tetra', cells['tetra'])], point_data=point_data, cell_data=cell_data)
     meshio.write(f_out, mesh)
 
     # get initial conditions
-    point_data['pressure'], point_data['velocity'] = get_initial_conditions(db, geo)
+    get_initial_conditions(db, geo, point_data)
 
     # write initial conditions to file
-    mesh = meshio.Mesh(points, cells, point_data=point_data, cell_data=cell_data)
+    mesh = meshio.Mesh(points, [('tetra', cells['tetra'])], point_data=point_data, cell_data=cell_data)
     meshio.write(f_ini, mesh)
 
 
