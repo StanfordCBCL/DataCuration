@@ -77,36 +77,74 @@ def get_1d_3d_map(f_1d, f_vol):
     seed_ids = np.array(cp_1d.search(points_vol[seed_points]))
 
     # call region growing algorithm
-    ids, dist = region_grow(vol, seed_points, seed_ids, n_max=999)
+    ids, dist, rad = region_grow(vol, seed_points, seed_ids, n_max=999)
 
-    return ids, dist
+    # check 1d to 3d map
+    assert np.max(ids) <= oned.GetNumberOfPoints() - 1, '1d-3d map non-conforming'
+
+    return ids, dist, rad
 
 
-def project_1d_3d_grow(f_1d, f_vol, f_out):
-    # get 1d -> 3d map
-    map_ids, map_iter = get_1d_3d_map(f_1d, f_vol)
+def add_array(geo, name, array):
+    arr = n2v(array)
+    arr.SetName(name)
+    geo.GetPointData().AddArray(arr)
 
+
+def project_1d_3d_grow(f_1d, f_vol, f_wall, f_out):
     # read geometries
     vol = read_geo(f_vol).GetOutput()
     cent = read_geo(f_1d).GetOutput()
+    wall = read_geo(f_wall).GetOutput()
+
+    # get 1d -> 3d map
+    map_ids, map_iter, map_rad = get_1d_3d_map(f_1d, f_vol)
 
     # get arrays
     arrays_cent = collect_arrays(cent.GetPointData())
 
-    # get 1d to 3d map
-    assert np.max(map_ids) <= cent.GetNumberOfPoints() - 1, '1d-3d map non-conforming'
-
     # map all centerline arrays to volume geometry
     for name, array in arrays_cent.items():
-        arr = n2v(array[map_ids])
-        arr.SetName(name)
-        vol.GetPointData().AddArray(arr)
+        add_array(vol, name, array[map_ids])
 
     # add mapping to volume mesh
     for name, array in zip(['MapIds', 'MapIters'], [map_ids, map_iter]):
-        arr = n2v(array)
-        arr.SetName(name)
-        vol.GetPointData().AddArray(arr)
+        add_array(vol, name, array)
+
+    # inverse map
+    map_ids_inv = {}
+    for i in np.unique(map_ids):
+        map_ids_inv[i] = np.where(map_ids == i)
+
+    # create radial coordinate [0, 1]
+    rad = np.zeros(vol.GetNumberOfPoints())
+    for i, ids in map_ids_inv.items():
+        rad_max = np.max(map_rad[ids])
+        if rad_max == 0:
+            rad_max = np.max(map_rad)
+        rad[ids] = map_rad[ids] / rad_max
+
+    # set points at wall to hard 1
+    wall_ids = collect_arrays(wall.GetPointData())['GlobalNodeID'].astype(int) - 1
+    rad[wall_ids] = 1
+
+    # mean velocity
+    u_mean = arrays_cent['flow'] / arrays_cent['area']
+
+    # parabolic velocity
+    u_quad = 2 * u_mean[map_ids] * (1 - rad**2)
+
+    # scale parabolic flow profile to preserve mean flow
+    for i, ids in map_ids_inv.items():
+        u_mean_is = np.mean(u_quad[map_ids_inv[i]])
+        u_quad[ids] *= u_mean[i] / u_mean_is
+
+    # parabolic velocity vector field
+    velocity = np.outer(u_quad, np.ones(3)) * arrays_cent['CenterlineSectionNormal'][map_ids]
+
+    # add to volume mesh
+    add_array(vol, 'rad', rad)
+    add_array(vol, 'velocity', velocity)
 
     # write to file
     write_geo(f_out, vol)
@@ -117,7 +155,8 @@ def main(db, geometries):
         f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
         f_0d = db.get_0d_flow_path_vtp(geo)
         f_1d = db.get_1d_flow_path_vtp(geo)
-        f_out = db.get_initial_conditions_pressure(geo)
+        f_wall = db.get_surfaces(geo, 'wall')
+        f_out = db.get_initial_conditions_pressure(geo) #'test.vtu'#
 
         if os.path.exists(f_1d):
             print(geo + ' using 1d')
@@ -129,11 +168,11 @@ def main(db, geometries):
             print(geo + ' no 0d/1d solution found')
             continue
 
-        if os.path.exists(f_out):
-            print('  map exists')
-            continue
+        # if os.path.exists(f_out):
+        #     print('  map exists')
+        #     continue
 
-        project_1d_3d_grow(f_red, f_vol, f_out)
+        project_1d_3d_grow(f_red, f_vol, f_wall, f_out)
 
 
 if __name__ == '__main__':
