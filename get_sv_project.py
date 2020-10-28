@@ -8,12 +8,12 @@ import matplotlib.cm as cm
 from collections import OrderedDict, defaultdict
 
 import numpy as np
+import scipy
 
-from get_database import input_args, Database, SVProject, SimVascular
-from inflow import optimize_inflow
+from get_database import input_args, Database, SVProject, SimVascular, Post
 
 
-def get_sv_opt(db, geo, mode=''):
+def get_sv_opt(db, geo, mode='steady'):
     # get boundary conditions
     bc_def = db.get_bcs(geo)
 
@@ -37,6 +37,29 @@ def get_sv_opt(db, geo, mode=''):
     elif mode == 'steady':
         n_cycle = 10
         inflow = np.mean(inflow) * np.ones(len(time))
+    elif mode == 'irene':
+        n_cycle = 1
+
+        # find time where inflow reaches mean flow
+        f_mean = np.mean(inflow)
+        t_mean = scipy.interpolate.interp1d(inflow[:10], time[:10])(f_mean).tolist()
+        assert t_mean > 0, 'could not find time step for mean-flow'
+        assert np.abs(scipy.interpolate.interp1d(time, inflow)(t_mean) - f_mean) < 1e-5, 'could not find mean-flow'
+
+        # round to nearest time step
+        i_mean = np.int(t_mean / dt + 0.5)
+
+        # shift inflow to start at mean flow
+        time_fine = np.arange(0, time[-1] + dt, dt)
+        inflow_fine = np.roll(scipy.interpolate.interp1d(time, inflow)(time_fine), -i_mean)
+
+        # interpolate back to original time step
+        inflow = scipy.interpolate.interp1d(time_fine, inflow_fine)(time)
+
+        p_str = 'time post nt=' + str(numstep-i_mean)
+        p_str += ' mean inflow f=' + str(f_mean * Post().convert['flow']) + ' [l/]'
+        p_str += ' at t=' + str(t_mean) + ' s'
+        print(p_str)
     elif mode == 'steady0':
         n_cycle = 10
         inflow = inflow[0] * np.ones(len(time))
@@ -45,6 +68,9 @@ def get_sv_opt(db, geo, mode=''):
         exit(1)
     else:
         raise ValueError('Unknown mode ' + mode)
+
+    # number of time steps
+    n_time = n_cycle * numstep + nt_out
 
     # create inflow string
     inflow_str = array_to_sv(np.vstack((time, inflow)).T)
@@ -84,7 +110,7 @@ def get_sv_opt(db, geo, mode=''):
            'min_iter': '3',
            'num_krylov': '300',
            'num_solve': '1',
-           'num_time': str(int(n_cycle * numstep + nt_out)),
+           'num_time': str(int(n_time)),
            'num_restart': '1',#str(nt_out),
            'n_cycle': n_cycle,
            'bool_surf_stress': 'True',
@@ -741,10 +767,11 @@ def write_bc(fdir, db, geo, write_face=True, model='3d'):
                 f.write(s + '\n')
             write_vals(['Rp', 'C', 'Rd'])
             if 'Po' in bc and bc['Po'] != 0.0:
-                return None, 'RCR with Po unequal zero'
-            # not sure what this does???
-            f.write('\n0.0 0\n')
-            f.write('1.0 0\n')
+                p_ref = bc['Po']
+            else:
+                p_ref = 0.0
+            f.write('\n0.0 ' + str(p_ref) + '\n')
+            f.write('1.0 ' + str(p_ref) + '\n')
         elif t == 'resistance':
             f.write(s + ' ')
             f.write(str(bc['R']) + ' ')
@@ -823,45 +850,34 @@ def make_folders(db, geo):
 def check_files(db, geo):
     # check if files exist
     if db.get_volume_mesh(geo) is None:
-        return False, 'no volume mesh'
+        raise RuntimeError('no volume mesh')
     if db.get_sv_surface(geo) is None:
-        return False, 'no SV surface mesh'
+        raise RuntimeError('no SV surface mesh')
     if db.get_img(geo) is None:
-        return False, 'no medical image'
-    return True, None
+        raise RuntimeError('no medical image')
 
 
 def create_sv_project(db, geo, mode=''):
-    success, err = check_files(db, geo)
-    if not success:
-        return err
+    check_files(db, geo)
 
-    # if True:
-    try:
-        opt = get_sv_opt(db, geo, mode)
-        print('Running geometry ' + geo)
-        print('Estimated cycles: ' + str(opt['n_cycle']))
-        make_folders(db, geo)
-        write_inflow(db, geo, '3d')
-        copy_files(db, geo)
+    opt = get_sv_opt(db, geo, mode)
+    print('Estimated cycles: ' + str(opt['n_cycle']))
+    make_folders(db, geo)
+    write_inflow(db, geo, '3d')
+    copy_files(db, geo)
 
-        write_svproj_file(db, geo)
-        # write_inflow_const(db, geo)
-        write_model(db, geo)
-        write_simulation(db, geo)
+    write_svproj_file(db, geo)
+    # write_inflow_const(db, geo)
+    write_model(db, geo)
+    write_simulation(db, geo)
 
-        write_mesh(db, geo)
-        write_pre(db, geo, 'svsolver')
-        # write_pre(db, geo, 'perigee')
-        write_solver(db, geo)
-        write_bc(os.path.join(db.get_solve_dir_3d(geo)), db, geo, False)
+    write_mesh(db, geo)
+    write_pre(db, geo, 'svsolver')
+    # write_pre(db, geo, 'perigee')
+    write_solver(db, geo)
+    write_bc(os.path.join(db.get_solve_dir_3d(geo)), db, geo, False)
 
-        err = write_path_segmentation(db, geo)
-        # if err:
-        #     return '  \nmissing paths:\n' + err
-        return False
-    except Exception as e:
-        return e
+    write_path_segmentation(db, geo)
 
 
 def main(db, geometries, params):
@@ -871,8 +887,9 @@ def main(db, geometries, params):
             mode = params.mode
         else:
             mode = ''
-        err = create_sv_project(db, geo, mode=mode)
-        print('  ' + str(err))
+
+        print('Running geometry ' + geo)
+        create_sv_project(db, geo, mode=mode)
 
 
 if __name__ == '__main__':
