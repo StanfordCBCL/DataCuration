@@ -13,20 +13,17 @@ from get_database import input_args, SimVascular, run_command
 from inflow import overwrite_inflow, check_inflow
 
 sys.path.append(os.path.join(SimVascular().perigee, '..'))
-from inflow_fourier_fit import fit_fourier_series
+# from inflow_fourier_fit import fit_fourier_series
 
 
 def generate_3d_svsolver(db, geo, n_sample_real=256):
     # simvascular object
     sv = SimVascular()
 
-    # create sim-vascular project
-    err = svproj.create_sv_project(db, geo)
-    if err:
-        return err
-
-    # if False:
     try:
+        # create sim-vascular project
+        svproj.create_sv_project(db, geo)
+
         # run pre-processor
         sv.run_pre(db.get_solve_dir_3d(geo), db.get_svpre_file(geo, 'svsolver'))
 
@@ -131,11 +128,7 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        err = generate_3d_svsolver(db, geo)
-        if err:
-            print('  ' + str(err))
-            continue
-
+        generate_3d_svsolver(db, geo)
         # generate_3d_perigee(db, geo)
 
 
