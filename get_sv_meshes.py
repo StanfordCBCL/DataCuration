@@ -59,18 +59,32 @@ def get_initial_conditions(db, geo, point_data):
         ini['pressure'] = 'osmsc'
         ini['velocity'] = 'osmsc'
 
+    ini = {'velocity': 'zero',
+           'pressure': 'zero'}
+
+    if ini['pressure'] == ini['velocity']:
+        print('study ini_' + ini['pressure'])
+    else:
+        print('study ini_' + ini['pressure'] + '_pres_' + ini['velocity'] + '_velo')
+
     # load initial conditions
     ini_val = defaultdict(dict)
 
+    # zero initial conditions (as in SimVascular)
     if 'zero' in ini.values():
-        ini_val['pressure']['zero'] = np.zeros(vol.GetNumberOfPoints())
-        ini_val['velocity']['zero'] = 0.0001 * np.ones((vol.GetNumberOfPoints(), 3))
+        n_points = len(point_data['GlobalNodeID'])
+        ini_val['pressure']['zero'] = np.zeros(n_points)
+        ini_val['velocity']['zero'] = 0.0001 * np.ones((n_points, 3))
 
-    if 'steady' in ini.values():
-        ini_val['pressure']['steady'], ini_val['velocity']['steady'] = get_last_result(db.get_initial_conditions_steady(geo))
+    # initial conditions from file
+    ini_paths = {'steady': db.get_initial_conditions_steady(geo),
+                 'irene': db.get_initial_conditions_irene(geo),
+                 'osmsc': db.get_volume(geo),
+                 'asymp': db.get_asymptotic(geo)}
 
-    if 'osmsc' in ini.values():
-        ini_val['pressure']['osmsc'], ini_val['velocity']['osmsc'] = get_last_result(db.get_volume(geo))
+    for i, f_path in ini_paths.items():
+        if i in ini.values():
+            ini_val['pressure'][i], ini_val['velocity'][i] = get_last_result(f_path)
 
     if '1d' in ini.values():
         data_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput().GetPointData()
