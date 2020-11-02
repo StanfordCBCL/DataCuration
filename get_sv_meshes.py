@@ -44,29 +44,10 @@ def get_last_result(fpath):
     return res[get_last_timestep(res, 'pressure')], res[get_last_timestep(res, 'velocity')]
 
 
-def get_initial_conditions(db, geo, point_data):
+def get_initial_conditions(db, geo, point_data, ini):
     """
     Generate initial conditions from database for pressure and velocity
     """
-    # select best available initial conditions
-    ini = {'velocity': '',
-           'pressure': ''}
-
-    if os.path.exists(db.get_initial_conditions_pressure(geo)):
-        ini['pressure'] = '1d'
-        ini['velocity'] = '1d'
-    else:
-        ini['pressure'] = 'osmsc'
-        ini['velocity'] = 'osmsc'
-
-    ini = {'velocity': 'zero',
-           'pressure': 'zero'}
-
-    if ini['pressure'] == ini['velocity']:
-        print('study ini_' + ini['pressure'])
-    else:
-        print('study ini_' + ini['pressure'] + '_pres_' + ini['velocity'] + '_velo')
-
     # load initial conditions
     ini_val = defaultdict(dict)
 
@@ -101,7 +82,7 @@ def get_initial_conditions(db, geo, point_data):
         point_data[f] = ini_val[f][i]
 
 
-def get_vol(db, geo):
+def get_vol(db, geo, ini):
     """
     Generate volume mesh for SimVascular: remove all unused arrays and reoder tet nodes
     """
@@ -123,13 +104,13 @@ def get_vol(db, geo):
     # reorder nodes in tets to fix negative Jacobian
     if not jacobian_positive(points, cells['tetra']):
         cells['tetra'] = cells['tetra'][:, [0, 1, 3, 2]]
-        print('    tets flipped')
+        print('  tets flipped')
     else:
-        print('    tets ok')
+        print('  tets ok')
     # assert jacobian_positive(points, cells['tetra']), 'Jacobian negative after flipping tets'
 
     if not jacobian_positive(points, cells['tetra']):
-        print('    Jacobian negative after flipping tets')
+        print('  Jacobian negative after flipping tets')
 
     # get arrays
     point_data = {'GlobalNodeID': np.expand_dims(v2n(vol.GetPointData().GetArray('GlobalNodeID')), axis=1)}
@@ -140,7 +121,7 @@ def get_vol(db, geo):
     meshio.write(f_out, mesh)
 
     # get initial conditions
-    get_initial_conditions(db, geo, point_data)
+    get_initial_conditions(db, geo, point_data, ini)
 
     # write initial conditions to file
     mesh = meshio.Mesh(points, [('tetra', cells['tetra'])], point_data=point_data, cell_data=cell_data)
@@ -235,7 +216,21 @@ def get_surf(db, geo):
 
 
 def get_meshes(db, geo):
-    get_vol(db, geo)
+    ini = {}
+    if 'ini_' in db.study:
+        ini_type = db.study.split('_')[1]
+        ini['pressure'] = ini_type
+        ini['velocity'] = ini_type
+    elif 'steady' == db.study:
+        ini['pressure'] = 'zero'
+        ini['velocity'] = 'zero'
+    elif 'irene' == db.study:
+        ini['pressure'] = 'steady'
+        ini['velocity'] = 'steady'
+    else:
+        raise ValueError('Unknown intialization for study ' + db.study)
+
+    get_vol(db, geo, ini)
     get_surf(db, geo)
 
 

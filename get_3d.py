@@ -8,7 +8,8 @@ import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 
-import get_sv_project as svproj
+from get_sv_project import Project
+from get_sv_meshes import get_meshes
 from get_database import input_args, SimVascular, run_command
 from inflow import overwrite_inflow, check_inflow
 
@@ -16,14 +17,25 @@ sys.path.append(os.path.join(SimVascular().perigee, '..'))
 # from inflow_fourier_fit import fit_fourier_series
 
 
-def generate_3d_svsolver(db, geo, n_sample_real=256):
+def generate_3d_svsolver(db, geo):
     # simvascular object
     sv = SimVascular()
 
-    try:
-        # create sim-vascular project
-        svproj.create_sv_project(db, geo)
+    mode = ''
+    if db.study == 'steady':
+        mode = 'steady'
+    elif db.study == 'irene':
+        mode = 'irene'
 
+    # try:
+    if True:
+        # get meshes
+        get_meshes(db, geo)
+
+        # create sim-vascular project
+        pj = Project(db, geo, mode)
+        pj.create_sv_project()
+        
         # run pre-processor
         sv.run_pre(db.get_solve_dir_3d(geo), db.get_svpre_file(geo, 'svsolver'))
 
@@ -32,8 +44,15 @@ def generate_3d_svsolver(db, geo, n_sample_real=256):
 
         # check inflow
         check_inflow(db, geo)
-    except Exception as e:
-        return e
+
+        # copy to study folder
+        src = db.get_solve_dir_3d(geo)
+        dst = os.path.join(db.fpath_solve, geo + '_' + db.study)
+        if os.path.exists(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+    # except Exception as e:
+    #     return e
 
     return False
 
