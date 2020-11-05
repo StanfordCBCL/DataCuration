@@ -4,6 +4,7 @@ import pdb
 import sys
 import os
 import vtk
+import shutil
 
 from collections import defaultdict
 import numpy as np
@@ -123,31 +124,58 @@ def project_1d_3d_grow(f_1d, f_vol, f_wall, f_out):
         if rad_max == 0:
             rad_max = np.max(map_rad)
         rad[ids] = map_rad[ids] / rad_max
+    add_array(vol, 'rad', rad)
 
     # set points at wall to hard 1
     wall_ids = collect_arrays(wall.GetPointData())['GlobalNodeID'].astype(int) - 1
     rad[wall_ids] = 1
 
     # mean velocity
-    u_mean = arrays_cent['flow'] / arrays_cent['area']
+    names = ['flow', 'velocity']
+    for n in names:
+        for a in arrays_cent.keys():
+            if n in a:
+                u_mean = arrays_cent[a] / arrays_cent['CenterlineSectionArea']
 
-    # parabolic velocity
-    u_quad = 2 * u_mean[map_ids] * (1 - rad**2)
+                # parabolic velocity
+                u_quad = 2 * u_mean[map_ids] * (1 - rad**2)
 
-    # scale parabolic flow profile to preserve mean flow
-    for i, ids in map_ids_inv.items():
-        u_mean_is = np.mean(u_quad[map_ids_inv[i]])
-        u_quad[ids] *= u_mean[i] / u_mean_is
+                # scale parabolic flow profile to preserve mean flow
+                for i, ids in map_ids_inv.items():
+                    u_mean_is = np.mean(u_quad[map_ids_inv[i]])
+                    u_quad[ids] *= u_mean[i] / u_mean_is
 
-    # parabolic velocity vector field
-    velocity = np.outer(u_quad, np.ones(3)) * arrays_cent['CenterlineSectionNormal'][map_ids]
+                # parabolic velocity vector field
+                velocity = np.outer(u_quad, np.ones(3)) * arrays_cent['CenterlineSectionNormal'][map_ids]
 
-    # add to volume mesh
-    add_array(vol, 'rad', rad)
-    add_array(vol, 'velocity', velocity)
+                # add to volume mesh
+                if n == 'velocity':
+                    aname = a
+                elif n == flow:
+                    aname = 'velocity'
+                add_array(vol, aname, velocity)
 
     # write to file
     write_geo(f_out, vol)
+
+
+def get_error(f_3d, f_1d, f_out):
+    geo_3d = read_geo(f_3d).GetOutput()
+    geo_1d = read_geo(f_1d).GetOutput()
+    arrays_3d = collect_arrays(geo_3d.GetPointData())
+    arrays_1d = collect_arrays(geo_1d.GetPointData())
+
+    for m in arrays_1d.keys():
+        if 'pressure' in m:
+            norm = np.mean(arrays_3d[m])
+            err = np.abs(arrays_3d[m] - arrays_1d[m]) / norm
+            add_array(geo_1d, 'error_' + m, err)
+        if 'velocity' in m:
+            norm = np.mean(np.linalg.norm(arrays_3d[m], axis=1))
+            err = np.linalg.norm(arrays_3d[m] - arrays_1d[m], axis=1) / norm
+            add_array(geo_1d, 'error_' + m, err)
+            pdb.set_trace()
+    write_geo(f_out, geo_1d)
 
 
 def main(db, geometries):
@@ -175,7 +203,28 @@ def main(db, geometries):
         project_1d_3d_grow(f_red, f_vol, f_wall, f_out)
 
 
+def convert_time(db, geometries):
+    for geo in geometries:
+        f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
+        f_res = db.get_volume(geo)
+        f_red = db.get_3d_flow(geo)
+        f_wall = db.get_surfaces(geo, 'wall')
+        d_out = os.path.join('/home/pfaller/work/osmsc/extrapolation/', geo)
+        f_out = os.path.join(d_out, geo + '_mapped.vtu')
+        f_err = os.path.join(d_out, geo + '_error.vtu')
+
+        os.makedirs(d_out, exist_ok=True)
+
+        project_1d_3d_grow(f_red, f_vol, f_wall, f_out)
+
+        shutil.copy(f_res, os.path.join(d_out, geo + '.vtu'))
+        shutil.copy(f_red, d_out)
+
+        get_error(f_res, f_out, f_err)
+
+
 if __name__ == '__main__':
     descr = 'Get 3D-3D statistics'
     d, g, _ = input_args(descr)
-    main(d, g)
+    # main(d, g)
+    convert_time(d, g)
