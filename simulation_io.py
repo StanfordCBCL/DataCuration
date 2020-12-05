@@ -40,7 +40,79 @@ def map_meshes(nd_id_src, nd_id_trg):
     return index[search]
 
 
+def read_hist(db, geo):
+    # read from text files
+    d_hist = '/home/pfaller/work/osmsc/studies/ini_1d_quad/hist/0186_0002'
+    res_bc = defaultdict(dict)
+    for f_name in os.listdir(d_hist):
+        if 'Hist' in f_name:
+            if f_name[0] == 'P':
+                f = 'pressure'
+            elif f_name[0] == 'Q':
+                f = 'velocity'
+            if 'COR' in f_name:
+                t = 'coronary'
+            elif 'RCR' in f_name:
+                t = 'rcr'
+            res_bc[f][t] = np.loadtxt(os.path.join(d_hist, f_name), skiprows=1)
+
+    # read centerline
+    cent = read_geo(db.get_centerline_path(geo)).GetOutput()
+    n_point = cent.GetNumberOfPoints()
+    arrays_cent, _ = get_all_arrays(cent)
+    branches = arrays_cent['BranchId']
+
+    # get time step
+    nt_out = db.get_3d_increment(geo)
+
+    # get outlets
+    caps = get_caps_db(db, geo)
+    del caps['inflow']
+    bct = db.get_bcs(geo)['bc_type']
+
+    # assign results to centerline
+    arrays = defaultdict(lambda: defaultdict(lambda: np.zeros(n_point)))
+    counter = defaultdict(int)
+    for c, br in caps.items():
+        # get bc type
+        t = bct[c]
+
+        # last point in branch is outlet
+        i_c = np.where(branches == br)[0][-1]
+
+        # loop result fields
+        for f in res_bc.keys():
+            # extract results for this outlet
+            res = res_bc[f][t]
+            if len(res.shape) == 2:
+                res = res_bc[f][t].T[counter[t]]
+
+            # loop all time steps and assign outlet value
+            for i in np.arange(0, len(res), nt_out):
+                arrays[f][f + '_' + str(i).zfill(5)][i_c] = res[i]
+        counter[t] += 1
+
+    # add to centerline
+    for arr in arrays.values():
+        for n, a in arr.items():
+            out_array = n2v(a)
+            out_array.SetName(n)
+            cent.GetPointData().AddArray(out_array)
+
+    # add empty area
+    out_array = n2v(np.zeros(n_point))
+    out_array.SetName('area')
+    cent.GetPointData().AddArray(out_array)
+
+    # write to file
+    f_out = os.path.join(d_hist, geo + '.vtp')
+    write_geo(f_out, cent)
+
+
 def read_results_0d(fpath):
+    """
+    Read 0d simulation results from dictionary
+    """
     # requested output fields
     names_0d = {'flow': 'Q',
                 'pressure': 'P',
@@ -113,6 +185,7 @@ def read_results_1d(res_dir, params_file=None):
             seg = int(re.findall(r'\d+', f_res)[-1])
             branch = int(re.findall(r'\d+', f_res)[-2])
             results_1d[field][branch][seg] = np.array(results_1d_f)
+            pdb.set_trace()
 
     # read simulation parameters and add to result dict
     results_1d['params'] = get_dict(params_file)
@@ -398,7 +471,7 @@ def load_results_3d(f_res_3d):
     return out
 
 
-def get_time(model, res, time, dt_3d=0, t_in=0):
+def get_time(model, res, time, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0):
     if '3d_rerun' in model:
         time[model + '_all'] = res['time'] * dt_3d
     elif '3d' in model:
@@ -407,6 +480,7 @@ def get_time(model, res, time, dt_3d=0, t_in=0):
     elif '1d' in model:
         dt = 1e-3
         time[model + '_all'] = np.arange(0, res['pressure'][0][0].shape[1] + 1)[1:] * dt
+        time[model + '_all'] = np.append(0, time[model + '_all'])
 
     # time steps for last cycle
     if model == '1d' or '3d_rerun' in model:
@@ -425,13 +499,20 @@ def get_time(model, res, time, dt_3d=0, t_in=0):
         # select last cycle and shift time to start from zero
         time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first - eps, time[model + '_all'] <= t_last + eps)
         time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_first
+        cycle_range = []
         for i in np.arange(1, n_cycle + 1):
             t_first = t_end * (i - 1)
             t_last = t_end * i
-            bound0 = time[model + '_all'] > t_first + eps
+            bound0 = time[model + '_all'] >= t_first - eps
             bound1 = time[model + '_all'] <= t_last + eps
             time[model + '_i_cycle_' + str(i)] = np.logical_and(bound0, bound1)
             time[model + '_cycle_' + str(i)] = time[model + '_all'][time[model + '_i_cycle_' + str(i)]] - t_first
+            cycle_range += [np.where(time[model + '_i_cycle_' + str(i)])[0]]
+        time[model + '_cycles'] = np.array(cycle_range)
+    # elif '3d_rerun' in model:
+    #     time_steps = res['time'].astype(int)
+    #     pdb.set_trace()
+
 
 
 def check_consistency(r_oned, res_1d, res_3d):
@@ -547,7 +628,7 @@ def res_1d_to_path(path, res):
     return np.array(path_1d), np.array(int_1d)
 
 
-def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, t_in=0, caps=None):
+def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0, caps=None):
     # read results
     # todo: store 1d results in vtp as well
     if '1d' in model:
@@ -572,7 +653,7 @@ def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, t_in=0, c
     branches = get_branches(arrays)
 
     # simulation time steps
-    get_time(model, res_in, time, dt_3d, t_in)
+    get_time(model, res_in, time, dt_3d=dt_3d, nt_3d=nt_3d, ns_3d=ns_3d, t_in=t_in)
 
     # loop outlets
     for br in branches:
@@ -583,6 +664,8 @@ def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, t_in=0, c
         for f in ['flow', 'pressure', 'area']:
             if '1d' in model:
                 res[br]['1d_path'], res[br][f]['1d_int'] = res_1d_to_path(branch_path, res_in[f][br])
+                if res[br][f]['1d_int'].shape[1] + 1 == time['1d_all'].shape[0]:
+                    res[br][f]['1d_int'] = np.hstack((np.zeros((res[br][f]['1d_int'].shape[0], 1)), res[br][f]['1d_int']))
             elif 'bc' in model:
                 if br not in caps.keys():
                     continue
@@ -660,7 +743,7 @@ def collect_results_spatial(model, res, time, f_res, dt_3d=0, t_in=0):
     #         res[model][n] = res[model][n][time[model + '_last_cycle_i']]
 
 
-def collect_results_db_1d_3d(db, geo):
+def collect_results_db_1d_3d(db, geo, use_rerun=True):
     # initialzie results dict
     res = defaultdict(lambda: defaultdict(dict))
     time = {}
@@ -668,6 +751,7 @@ def collect_results_db_1d_3d(db, geo):
     # get paths
     f_res_1d = db.get_1d_flow_path(geo)
     f_res_3d = db.get_3d_flow(geo)
+    f_res_3d_rerun = '/home/pfaller/work/osmsc/studies/ini_best/3d_flow/' + geo + '.vtp'
     f_oned = db.get_1d_geo(geo)
 
     if not os.path.exists(f_res_1d) or not os.path.exists(f_res_3d):
@@ -676,7 +760,10 @@ def collect_results_db_1d_3d(db, geo):
     time_inflow, _ = db.get_inflow_smooth(geo)
 
     # collect results
-    collect_results('3d', res, time, f_res_3d)
+    if os.path.exists(f_res_3d_rerun) and use_rerun:
+        collect_results('3d_rerun', res, time, f_res_3d_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+    else:
+        collect_results('3d', res, time, f_res_3d)
     collect_results('1d', res, time, f_res_1d, f_oned, t_in=time_inflow[-1])
 
     return res, time
@@ -692,19 +779,19 @@ def collect_results_db_3d_3d(db, geo, bc=False):
     if not os.path.exists(f_res_3d_osmsc):
         return None, None
 
+    # collect osmsc results
+    collect_results('3d', res, time, f_res_3d_osmsc)
+
     if bc:
         f_res_3d_rerun = db.get_3d_flow_rerun_bc(geo)
     else:
         f_res_3d_rerun = db.get_3d_flow_rerun(geo)
     if not os.path.exists(f_res_3d_rerun):
-        return None, None
-
-    # collect osmsc results
-    collect_results('3d', res, time, f_res_3d_osmsc)
+        return res, time
 
     time_inflow, _ = db.get_inflow_smooth(geo)
     if time_inflow is None:
-        return None, None
+        return res, time
 
     # collect rerun results
     if bc:
@@ -712,9 +799,10 @@ def collect_results_db_3d_3d(db, geo, bc=False):
         f_surf = db.get_surfaces(geo, 'all_exterior')
         _, br_to_bcface = get_caps_db(db, geo, f_surf=f_surf)
         collect_results('3d_rerun_bc', res, time, f_res_3d_rerun, centerline=f_cent, dt_3d=db.get_3d_timestep(geo),
-                        t_in=time_inflow[-1], caps=br_to_bcface)
+                        nt_3d=db.get_3d_increment(geo), t_in=time_inflow[-1], caps=br_to_bcface)
     else:
-        collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo), t_in=time_inflow[-1])
+        collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo),
+                        nt_3d=db.get_3d_increment(geo), ns_3d=db.get_3d_numstep(geo), t_in=time_inflow[-1])
 
     return res, time
 
@@ -790,11 +878,12 @@ def main(db, geometries):
     for geo in geometries:
         print('Processing ' + geo)
 
+        read_hist(db, geo)
         if not os.path.exists(db.get_0d_flow_path(geo)):
             continue
 
         # export_1d_xmdf(db, geo)
-        export_0d_vtp(db, geo)
+        # export_0d_vtp(db, geo)
         # export_last(db, geo)
 
 
