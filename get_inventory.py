@@ -6,11 +6,14 @@ import csv
 import numpy as np
 from collections import defaultdict, OrderedDict
 
-from get_database import Database
+from get_database import Database, Post
 from get_sv_project import coronary_sv_to_oned
+from common import get_dict
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+
+# color by category
 
 
 def main():
@@ -64,18 +67,13 @@ def main():
 
 
 def time_constant():
-    db = Database()
-    # geometries = db.get_geometries()
-    geometries = db.get_geometries_select('paper')
+    db = Database('1spb_length')
+    post = Post()
+    geometries = db.get_geometries()
+    # geometries = db.get_geometries_select('paper')
 
-    # color by category
-    colors = {'Cerebrovascular': 'k',
-              'Coronary': 'r',
-              'Aortofemoral': 'm',
-              'Pulmonary': 'c',
-              'Congenital Heart Disease': 'y',
-              'Aorta': 'b',
-              'Animal and Misc': '0.75'}
+    # get numerical time constants
+    res_num = get_dict(db.get_convergence_path())
 
     fig1, ax1 = plt.subplots(dpi=400, figsize=(15, 6))
 
@@ -85,44 +83,26 @@ def time_constant():
         params = db.get_bcs(geo)
         time, _ = db.get_inflow(geo)
 
-        # skip geometries without BCs
-        if params is None:
-            continue
-
-        col = colors[params['params']['deliverable_category']]
-
         # collect all time constants
-        tau_bc = []
-        for cp, bc in params['bc'].items():
-            if 'Rd' in bc:
-                tau = bc['Rd'] * bc['C']
-                m = '_'
-            elif 'Pim' in bc:
-                p = {}
-                cor = coronary_sv_to_oned(bc)
-                p['R1'], p['R2'], p['R3'], p['C1'], p['C2'] = (cor['Ra1'], cor['Ra2'], cor['Rv1'], cor['Ca'], cor['Cc'])
-                tau1 = p['C1'] / (1 / (p['R2'] + p['R1']) + 1 / p['R3'])
-                tau2 = p['C2'] / (1 / (p['R2'] + p['R3']) + 1 / p['R1'])
-                tau = tau1 + tau2
-                if 'l' in cp.lower():
-                    m = 'x'
-                else:
-                    m = 'o'
-            else:
-                continue
-
-            #  tau in cardiac cycles
-            tau /= time[-1]
-
-            ax1.plot(i, tau, marker=m, color=col)
-            tau_bc += [tau]
+        tau_bc = db.get_time_constants(geo)
 
         # skip geometries without RCR
         if len(tau_bc) == 0:
             continue
 
+        col = post.colors[params['params']['deliverable_category']]
+        if geo in res_num:
+            tau_num = res_num[geo]['tau']
+            for j in range(len(tau_num['flow'])):
+                # ax1.plot(i, tau_num[geo]['flow'][j], marker='x', color=col)
+                ax1.plot(i, tau_num['pressure'][j], marker='x', color=col)
+
+            print(geo + ' tau_num = ' + '{:2.1f}'.format(np.mean(tau_num['pressure'])))
+
         # ax1.boxplot(tau_bc, positions=[i])
         ax1.plot([i, i], [np.min(tau_bc), np.max(tau_bc)], '-', color=col)
+        ax1.plot(i, np.min(tau_bc), '_', color=col)
+        ax1.plot(i, np.max(tau_bc), '_', color=col)
 
         geos += [geo]
         i += 1
