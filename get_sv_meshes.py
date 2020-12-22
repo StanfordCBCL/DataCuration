@@ -59,6 +59,7 @@ def get_initial_conditions(db, geo, point_data, ini):
 
     # initial conditions from file
     ini_paths = {'steady': db.get_initial_conditions_steady(geo),
+                 'steady0': db.get_initial_conditions_steady0(geo),
                  'irene': db.get_initial_conditions_irene(geo),
                  'osmsc': db.get_volume(geo),
                  'asymp': db.get_asymptotic(geo)}
@@ -67,8 +68,9 @@ def get_initial_conditions(db, geo, point_data, ini):
         if i in ini.values():
             ini_val['pressure'][i], ini_val['velocity'][i] = get_last_result(f_path)
 
-    if '1d' in ini.values():
-        data_1d = read_geo(db.get_initial_conditions_pressure(geo)).GetOutput().GetPointData()
+    fpath_red = db.get_initial_conditions_pressure(geo)
+    if '1d' in ini.values() and os.path.exists(fpath_red):
+        data_1d = read_geo(fpath_red).GetOutput().GetPointData()
         for f in ini.keys():
             if data_1d.HasArray(f):
                 ini_val[f]['1d'] = v2n(data_1d.GetArray(f))
@@ -76,7 +78,7 @@ def get_initial_conditions(db, geo, point_data, ini):
     # apply initial conditions
     for f, i in ini.items():
         if i not in ini_val[f]:
-            raise ValueError('Unknown ' + f + ' initialization ' + i)
+            raise RuntimeError('Unknown ' + f + ' initialization ' + i)
 
         print('  initial condition ' + f + ': ' + i)
         point_data[f] = ini_val[f][i]
@@ -221,7 +223,7 @@ def get_meshes(db, geo):
         ini_type = db.study.split('_')[1]
         ini['pressure'] = ini_type
         ini['velocity'] = ini_type
-    elif 'steady' == db.study:
+    elif 'steady' in db.study:
         ini['pressure'] = 'zero'
         ini['velocity'] = 'zero'
     elif 'irene' == db.study:
@@ -248,4 +250,3 @@ if __name__ == '__main__':
     descr = 'Generate all meshes for SimVascular'
     d, g, _ = input_args(descr)
     main(d, g)
-
