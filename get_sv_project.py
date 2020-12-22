@@ -11,6 +11,7 @@ import numpy as np
 import scipy.interpolate
 
 from get_database import input_args, Database, SVProject, SimVascular, Post
+from common import coronary_sv_to_oned, get_dict
 
 
 class Project:
@@ -42,10 +43,10 @@ class Project:
             bc_def = rc_to_r(bc_def)
 
         # number of cycles
-        n_cycle = self.estimate_n_cycle(bc_def)
-    
+        n_cycle = self.estimate_n_cycle()
+
         # number of time steps
-        numstep = int(float(bc_def['params']['sim_steps_per_cycle']))
+        numstep = self.db.get_3d_numstep(self.geo)
     
         # time step
         dt = self.db.get_3d_timestep(self.geo)
@@ -58,9 +59,14 @@ class Project:
 
         if self.mode == '':
             pass
+        elif self.mode == 'ini_1d_quad':
+            n_cycle = 5
         elif self.mode == 'steady':
             n_cycle = 1
             inflow = np.mean(inflow) * np.ones(len(time))
+        elif self.mode == 'steady0':
+            n_cycle = 1
+            inflow = inflow[0] * np.ones(len(time))
         elif self.mode == 'irene':
             n_cycle = 1
     
@@ -85,12 +91,9 @@ class Project:
             p_str += ' mean inflow f=' + str(f_mean * Post().convert['flow']) + ' [l/]'
             p_str += ' at t=' + str(t_mean * dt_fine) + ' s'
             print(p_str)
-        elif self.mode == 'steady0':
-            n_cycle = 1
-            inflow = inflow[0] * np.ones(len(time))
         else:
             raise ValueError('Unknown mode ' + self.mode)
-    
+
         # number of time steps
         n_time = n_cycle * numstep + nt_out
     
@@ -103,7 +106,8 @@ class Project:
             n_fourier = int(n_t / 2 + 1)
         else:
             n_fourier = int((n_t + 1) / 2)
-    
+        n_fourier = np.min([200, n_fourier])
+
         # number of points
         n_point = len(time)
     
@@ -113,7 +117,7 @@ class Project:
             inflow_type = 'plug'
         if inflow_type not in ['parabolic', 'plug', 'womersley']:
             raise ValueError('unknown inflow type ' + inflow_type)
-    
+
         # set svsolver options
         opt = {'bc': bc_def,
                'density': '1.06',
@@ -159,22 +163,25 @@ class Project:
                'mesh_walls': os.path.join('mesh-complete', 'walls_combined.vtp')}
         return opt
     
-    def estimate_n_cycle(self, bc_def, n_tau=5):
-        # time for one cycle
-        time, _ = self.db.get_inflow_smooth(self.geo)
-        t_cycle = time[-1]
-    
-        # get RC time constant from boundary conditions
-        tau_bc = []
-        for bc in bc_def['bc'].values():
-            if 'Rd' in bc:
-                tau_bc += [bc['Rd'] * bc['C'] / t_cycle]
-    
-        # estimate number of cycles to reach convergence from largest RC constant
-        if len(tau_bc) == 0:
-            return 2
+    def estimate_n_cycle(self, n_tau=3):
+        # get numerical time constants
+        db = Database('1spb_length')
+        res_num = get_dict(db.get_convergence_path())
+
+        if self.geo not in res_num:
+            return n_tau
         else:
-            return int(n_tau * (np.max(tau_bc)) + 1.0)
+            # time constant
+            tau = np.mean(res_num[self.geo]['tau']['pressure'])
+
+            # tolerance for asymptotic convergence
+            tol = 0.01
+
+            # number of cardiac cycles required to reach tolerance (+ extra)
+            n_cycle = int(- np.log(tol) * tau + 0.5) + n_tau
+
+            print('tau [cycles] = ' + str(n_cycle))
+            return n_cycle
     
     def write_svproj_file(self):
         t = str(self.db.svproj.t)
@@ -830,39 +837,6 @@ def array_to_sv(array):
         if j < array.shape[0] - 1:
             sv_str += '&#x0A;'
     return sv_str
-
-
-def coronary_sv_to_oned(bc):
-    """
-    Convert format of coronary boundary condition parameters from svSimVascular to svOneDSolver
-    """
-    # unpack constants
-    p1, p2, q0, q1, q2, b1 = (bc['p1'], bc['p2'], bc['q0'], bc['q1'], bc['q2'], bc['b1'])
-    Rv_micro = 0.0
-
-    # build system of equations (obtained from analytically solving for constants as defined in paper)
-    # see H. J. Kim et al. "Patient-Specific Modeling of Blood Flow and Pressure in Human Coronary Arteries", p. 3198
-    Ra = q2 / p2
-    Ra_micro = (p1 ** 2 * q2 ** 2 - 2 * p1 * p2 * q1 * q2 + p2 ** 2 * q1 ** 2) / (
-            p2 * (- q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2))
-    Ca = -p2 ** 2 / (p1 * q2 - p2 * q1)
-    Cim = (- q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2) ** 2 / ((p1 * q2 - p2 * q1) * (
-            p1 ** 2 * q0 * q2 - p1 * p2 * q0 * q1 - p1 * q1 * q2 + p2 ** 2 * q0 ** 2 - 2 * p2 * q0 * q2 + p2 * q1 ** 2 + q2 ** 2))
-    Rv = -(
-            p1 ** 2 * q0 * q2 - p1 * p2 * q0 * q1 - p1 * q1 * q2 + p2 ** 2 * q0 ** 2 - 2 * p2 * q0 * q2 + p2 * q1 ** 2 + q2 ** 2) / (
-                 - q2 * p1 ** 2 + q1 * p1 * p2 - q0 * p2 ** 2 + q2 * p2)
-
-    # check equation residuals
-    res = [p1 - (Ra_micro * Ca + (Rv + Rv_micro) * (Ca + Cim)),
-           p2 - (Ca * Cim * Ra_micro * (Rv + Rv_micro)),
-           q0 - (Ra + Ra_micro + Rv + Rv_micro),
-           q1 - (Ra * Ca * (Ra_micro + Rv + Rv_micro) + Cim * (Ra + Ra_micro) * (Rv + Rv_micro)),
-           q2 - (Ca * Cim * Ra * Ra_micro * (Rv + Rv_micro)),
-           b1 - (Cim * (Rv + Rv_micro))]
-    assert np.max(np.abs(res)) < 1e-5, 'SV coronary constants inconsistent'
-
-    # export constants
-    return {'Ra1': Ra, 'Ra2': Ra_micro, 'Ca': Ca, 'Cc': Cim, 'Rv1': Rv, 'P_v': 0.0}
 
 
 def rc_to_r(bc_def):
