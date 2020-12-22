@@ -4,6 +4,9 @@ import numpy as np
 import os
 import sys
 import pdb
+import csv
+from tqdm import tqdm
+import seaborn as sns
 
 from collections import defaultdict
 from scipy.interpolate import CubicSpline, interp1d
@@ -16,14 +19,16 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 from get_database import input_args, Database, Post, SimVascular
 from vtk_functions import read_geo, write_geo
 from get_bc_integrals import integrate_surfaces, integrate_bcs
-from simulation_io import get_caps_db, collect_results, collect_results_db_3d_3d, get_dict
+from simulation_io import get_caps_db, collect_results, collect_results_db_3d, collect_results_db_1d_3d, get_dict, \
+    collect_results_db_0d
 from compare_1d import add_image
 from get_sv_project import coronary_sv_to_oned
 from bc_0d import run_rcr, run_coronary
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
-
+import matplotlib
+matplotlib.use('Agg')
 
 def get_cycle(f, n_cycle):
     return np.hstack((f, np.tile(f[1:], n_cycle - 1)))
@@ -77,7 +82,7 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
         p_0d = run_rcr(Qfunc, time_0d, p, distal_pressure)
     elif 'R1' in p:
         _, p_v_time, p_v_pres = cont_func(distal_pressure[:, 0], distal_pressure[:, 1], 3)
-        p_0d = run_coronary(Qfunc, time_0d, p, p_v_time, p_v_pres, time[-1])
+        p_0d = run_coronary(Qfunc, time_0d, p, p_v_time, p_v_pres, time[-1], 0.0)
     else:
         raise ValueError('Unknown boundary conditions')
 
@@ -94,8 +99,9 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
 
 def compare_0d(db, geo, res, time, m):
     # get boundary conditions
-    bc_def, params = db.get_bcs(geo)
-    bc_type, err = db.get_bc_type(geo)
+    bc_def = db.get_bcs(geo)
+    if bc_def is None:
+        return None
 
     inlet_time = time[m]
 
@@ -106,66 +112,81 @@ def compare_0d(db, geo, res, time, m):
         if 'inflow' not in cp:
             outlets[cp] = br
 
+    # initialize output dict
     res_bc = defaultdict(dict)
+
+    # loop all outlets
     for j, (cp, br) in enumerate(outlets.items()):
+        print('outlet ' + str(j+1) + '/' + str(len(outlets)))
         # cap bcs
         bc = bc_def['bc'][cp]
-        t = bc_type[cp]
+        t = bc_def['bc_type'][cp]
 
-        # bc inlet flow
-        inlet_flow = res[br]['flow'][m + '_cap']
+        # loop all cardiac cycles
+        # for cycle in tqdm(range(1, time[m + '_n_cycle'] + 1)):
+        for cycle in [time[m + '_n_cycle']]:
+            # bc inlet flow
+            inlet_flow = res[br]['flow'][m + '_all'][time[m + '_i_cycle_' + str(cycle)]]
 
-        # select boundary condition
-        p = {}
-        if t == 'rcr':
-            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, bc, bc['Po'])
-        elif t == 'resistance':
-            res_bc[br]['t'] = inlet_time
-            res_bc[br]['p'] = bc['Po'] + bc['R'] * inlet_flow
-        elif t == 'coronary':
-            if not bc_def['coronary']:
-                continue
+            # output name for pressure in this cycle
+            out = 'p_' + str(cycle)
 
-            cor = coronary_sv_to_oned(bc)
-            p['R1'], p['R2'], p['R3'], p['C1'], p['C2'] = (cor['Ra1'], cor['Ra2'], cor['Rv1'], cor['Ca'], cor['Cc'])
-            p_v_t = bc_def['coronary'][bc['Pim']][:, 0]
-            p_v_p = bc_def['coronary'][bc['Pim']][:, 1]
+            # select boundary condition
+            p = {}
+            if t == 'rcr':
+                res_bc[br]['t'], res_bc[br][out] = run_0d_cycles(inlet_flow, inlet_time, bc, bc['Po'])
+            elif t == 'resistance':
+                res_bc[br]['t'] = inlet_time
+                res_bc[br][out] = bc['Po'] + bc['R'] * inlet_flow
+            elif t == 'coronary':
+                if not bc_def['coronary']:
+                    continue
 
-            res_bc[br]['t'], res_bc[br]['p'] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_t, p_v_p)).T)
+                # convert coronary parameters
+                cor = coronary_sv_to_oned(bc)
+                p['R1'], p['R2'], p['R3'], p['C1'], p['C2'] = (cor['Ra1'], cor['Ra2'], cor['Rv1'], cor['Ca'], cor['Cc'])
+                p_v_t = bc_def['coronary'][bc['Pim']][:, 0]
+                p_v_p = bc_def['coronary'][bc['Pim']][:, 1]
+
+                res_bc[br]['t'], res_bc[br][out] = run_0d_cycles(inlet_flow, inlet_time, p, np.vstack((p_v_t, p_v_p)).T)
+
+        # copy last cycle
+        res_bc[br]['p'] = res_bc[br][out]
 
     return res_bc
 
 
-def check_bc(db, geo, plot_rerun=True):
-    # get post-processing constants
-    post = Post()
-
+def check_bc(db, geo):
     # collect results
-    if not os.path.exists(db.get_3d_flow_rerun(geo)):
+    # if plot_rerun and not os.path.exists(db.get_3d_flow_rerun(geo)):
+    #     return
+
+    m = '3d_rerun'
+    # m = '0d'
+
+    # get 3d results
+    if m == '0d':
+        res, time = collect_results_db_0d(db, geo)
+    elif m == '3d_rerun':
+        res, time = collect_results_db_3d(db, geo, m)
+    else:
         return
-    res, time = collect_results_db_3d_3d(db, geo)
     if res is None:
         return
 
-    print('Plotting ' + geo)
-
-    use_bc = False
-    if use_bc:
-        rerun_name = '3d_rerun_bc'
+    # get 0d results
+    if not os.path.exists(db.get_bc_0D_path(geo, m)):
+        res_0d = compare_0d(db, geo, res, time, m)
+        np.save(db.get_bc_0D_path(geo, m), res_0d)
     else:
-        rerun_name = '3d_rerun'
+        res_0d = np.load(db.get_bc_0D_path(geo, m), allow_pickle=True).item()
 
-    if plot_rerun and rerun_name + '_cap' in res[0]['flow']:
-        m = rerun_name
-    else:
-        m = '3d'
     inlet_time = time[m]
 
-    # get 0d results
-    res_0d = compare_0d(db, geo, res, time, m)
+    # if res_0d is None or 'p_1' not in res_0d[list(res_0d.keys())[0]]:
+    #     return
 
-    # save pressure curves
-    np.save(db.get_bc_0D_path(geo), res_0d)
+    print('Plotting ' + geo)
 
     # get outlets
     caps = get_caps_db(db, geo)
@@ -175,41 +196,88 @@ def check_bc(db, geo, plot_rerun=True):
             outlets[cp] = br
 
     # bounbdary condition types
-    bc_type, err = db.get_bc_type(geo)
+    bc_def = db.get_bcs(geo)
 
     # get cap names
     names = db.get_cap_names(geo)
+
+    # get numerical boundary condition time constants
+    # res_num = get_dict(db.get_convergence_path())[geo]
 
     dpi = 300
     if len(outlets) > 50:
         dpi //= 4
 
-    fig, ax = plt.subplots(1, len(outlets), figsize=(len(outlets) * 3 + 4, 6), dpi=dpi, sharey=True)
-    f = 'pressure'
+    # fields = ['Flow 3D', 'Pressure 3D', 'Pressure 0D']
+    # fields = ['Flow 3D', 'Pressure 3D', 'Pressure 0D', 'Pressure Paper']
+    # fields = ['Pressure 0D', 'Pressure Paper']
+    fields = ['Flow 3D', 'Pressure 3D']
+    # fields = ['Pressure 3D', 'Pressure 0D']
+    # fields = ['Pressure 3D', 'Pressure 0D', 'Pressure Q const']
+    fig, ax = plt.subplots(len(fields), len(outlets), figsize=(len(outlets) * 3 + 4, 6), dpi=dpi, sharex=True)#), sharey=True
+
+    # get post-processing constants
+    post = Post()
 
     errors = []
     for j, (cp, br) in enumerate(outlets.items()):
-        t = bc_type[cp]
+        if br not in res_0d:
+            continue
+        for i, field in enumerate(fields):
+            f = field.split()[0].lower()
 
-        # plot settings
-        ax[j].grid(True)
-        ax[j].set_title(names[cp])
-        ax[j].set_xlabel('Time [s]')
-        ax[j].xaxis.set_tick_params(which='both', labelbottom=True)
-        if j == 0:
-            ax[j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
-            ax[j].yaxis.set_tick_params(which='both', labelleft=True)
+            # plot settings
+            ax[i, j].grid(True)
+            if j == 0:
+                ax[i, j].set_ylabel(field + '\n[' + post.units[f] + ']')
+                ax[i, j].yaxis.set_tick_params(which='both', labelleft=True)
+            if i == 0:
+                ax[i, j].set_title(names[cp] + ' (' + bc_def['bc_type'][cp].upper() + ')')
+            if i == len(fields) - 1:
+                ax[i, j].set_xlabel('Time [s]')
+                ax[i, j].set_xlim(0, inlet_time[-1])
+                ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
 
-        # plot bcs
-        ax[j].plot(inlet_time, res[br]['pressure'][m + '_cap'] * post.convert[f], post.styles[m], color=post.colors[m])
-        ax[j].plot(res_0d[br]['t'], res_0d[br]['p'] * post.convert[f], 'k--')
+            # plot bcs
+            for cycle in range(1, time[m + '_n_cycle'] + 1):
+                ids = field.split()[1].lower()
+                if ids == '3d':
+                    x = inlet_time
+                    y = res[br][f][m + '_all'][time[m + '_i_cycle_' + str(cycle)]]
+                elif ids == '0d':
+                    x = res_0d[br]['t']
+                    y = res_0d[br]['p_' + str(cycle)]
+                elif ids == 'q':
+                    inlet_flow = res[br]['flow'][m + '_all'][time[m + '_i_cycle_' + str(cycle)]]
+                    if bc_def['bc_type'][cp] == 'rcr':
+                        resistance = bc_def['bc'][cp]['Rp'] + bc_def['bc'][cp]['Rd']
+                    elif bc_def['bc_type'][cp] == 'coronary':
+                        cor = coronary_sv_to_oned(bc_def['bc'][cp])
+                        resistance = cor['Ra1'] + cor['Ra2'] + cor['Rv1']
+                    x = inlet_time
+                    y = np.ones(len(x)) * np.mean(inlet_flow) * resistance
+                elif ids == 'paper':
+                    if cycle == time[m + '_n_cycle']:
+                        x = np.nan
+                        y = np.nan
+                    else:
+                        tau = np.mean(res_num['tau'][f])
+                        alpha = 1 / (np.exp(1 / tau) - 1)
+                        p0 = res_0d[br]['p_' + str(cycle)]
+                        p1 = res_0d[br]['p_' + str(cycle + 1)]
 
-        # legend
-        ax[j].legend([rerun_name.upper(), '0D ' + t.upper()])
+                        x = res_0d[br]['t']
+                        y = alpha * p0 + (1 - alpha) * p1
+                else:
+                    raise RuntimeError('Unknown selection ' + ids)
+
+                i_c = 1 - (cycle - 1) / (time[m + '_n_cycle'] - 1)
+                ax[i, j].plot(x, y * post.convert[f], color=plt.get_cmap('plasma')(i_c))
 
         # calculate error
         diff = interp1d(res_0d[br]['t'], res_0d[br]['p'], fill_value='extrapolate')(inlet_time) - res[br]['pressure'][m + '_cap']
-        err = np.mean(np.abs(diff)) / np.mean(res[br]['pressure'][m + '_cap'])
+        norm = np.max(res[br]['pressure'][m + '_cap']) - np.min(res[br]['pressure'][m + '_cap'])
+        err = np.mean(np.abs(diff)) / norm
         errors += [err]
 
     max_err = np.max(errors) * 100
@@ -219,21 +287,27 @@ def check_bc(db, geo, plot_rerun=True):
 
     # save figure
     add_image(db, geo, fig)
-    if plot_rerun:
-        f_out = db.get_post_path(geo, 'bcs')
-    else:
-        f_out = db.get_bc_comparison_path(geo)
+    f_out = db.get_bc_comparison_path(geo, m)
     fig.savefig(f_out, bbox_inches='tight')
     plt.close(fig)
 
     # add error to log
-    if m == '3d':
-        db.add_bc_err(geo, max_err)
+    db.add_bc_err(geo, m, max_err)
+
+
+def check_first_last(db, geo):
+    # collect results
+    res, time = collect_results_db_3d_3d(db, geo)
+    if res is None:
+        return
+
+    return
 
 
 def plot(db, geometries):
     # read all errors
-    errors = get_dict(db.get_bc_err_file())
+    errors = get_dict(db.get_bc_err_file('3d'))
+    errors_re = get_dict(db.get_bc_err_file('3d_rerun'))
 
     # color by category
     colors = {'Cerebrovascular': 'k',
@@ -244,14 +318,19 @@ def plot(db, geometries):
               'Aorta': 'b',
               'Animal and Misc': '0.75'}
 
-    geo = []
     err = []
+    geo = []
     col = []
-    for g, e in errors.items():
-        if g in geometries:
-            geo += [g]
-            err += [e]
-            col += [colors[db.get_params(g)['deliverable_category']]]
+    for g in geometries:
+        if g in errors_re:
+            err += [errors_re[g]]
+        elif g in errors:
+            err += [errors[g]]
+        else:
+            continue
+            # err += [np.nan]
+        geo += [g]
+        col += [colors[db.get_bcs(g)['params']['deliverable_category']]]
 
     # sort according to error
     order = np.argsort(err)
@@ -279,6 +358,12 @@ def plot(db, geometries):
     fname = os.path.join(db.fpath_gen, 'bc_err.png')
     # plt.legend(list(colors.keys()))
     fig1.savefig(fname, bbox_inches='tight')
+
+    # write to csv
+    with open(os.path.join(db.fpath_gen, 'bc_err.csv'), 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile, delimiter=',')
+        for g, e in zip(geo, err):
+            writer.writerow([g, str(e)])
 
 
 def main(db, geometries):
