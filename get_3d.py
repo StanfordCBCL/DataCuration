@@ -7,6 +7,8 @@ import pdb
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
 
 from get_sv_project import Project
 from get_sv_meshes import get_meshes
@@ -22,13 +24,10 @@ def generate_3d_svsolver(db, geo):
     sv = SimVascular()
 
     mode = ''
-    if db.study == 'steady':
-        mode = 'steady'
-    elif db.study == 'irene':
-        mode = 'irene'
+    if db.study in ['steady', 'steady0', 'irene']:
+        mode = db.study
 
-    # try:
-    if True:
+    try:
         # get meshes
         get_meshes(db, geo)
 
@@ -51,8 +50,8 @@ def generate_3d_svsolver(db, geo):
         if os.path.exists(dst):
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
-    # except Exception as e:
-    #     return e
+    except Exception as e:
+        return e
 
     return False
 
