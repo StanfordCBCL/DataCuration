@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import sv
 import glob
 import io
 import os
@@ -12,10 +11,11 @@ import sys
 import numpy as np
 
 from get_database import Database, SimVascular, Post, input_args
-from get_sv_project import write_bc, write_inflow
+from get_sv_project import Project
 from simulation_io import read_results_1d, get_caps_db
+from common import coronary_sv_to_oned
 
-sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
+sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/')
 
 import sv_1d_simulation as oned
 
@@ -23,6 +23,9 @@ import sv_1d_simulation as oned
 def get_params(db, geo):
     # store parameters for export
     params = {}
+
+    # simvascular project
+    project = Project(db, geo, '')
     
     params['fpath_1d'] = db.get_solve_dir_1d(geo)
     fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
@@ -61,7 +64,7 @@ def get_params(db, geo):
         raise RuntimeError('no boundary conditions')
 
     # write outlet boundary conditions to file if they exist
-    params['bc_types'], err = write_bc(params['fpath_1d'], db, geo, model='1d')
+    params['bc_types'], err = project.write_bc(params['fpath_1d'], model='1d')
     if err:
         raise RuntimeError(err)
 
@@ -101,6 +104,8 @@ def get_params(db, geo):
 
 
 def generate_1d_api(db, geo):
+    import sv
+
     # get parameters
     params_db = get_params(db, geo)
 
@@ -162,6 +167,9 @@ def generate_1d(db, geo):
     # get parameters
     params = get_params(db, geo)
 
+    # simvascular project
+    project = Project(db, geo, '')
+
     # set simulation paths
     fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
     fpath_surf = os.path.join(fpath_geo, 'surfaces')
@@ -175,7 +183,7 @@ def generate_1d(db, geo):
     shutil.copy(db.get_centerline_outlet_path(geo), fpath_outlets)
 
     # write inflow
-    write_inflow(db, geo, '1d')
+    project.write_inflow('1d')
 
     # try:
     if True:
@@ -201,7 +209,7 @@ def generate_1d(db, geo):
                  olufsen_material_exp=2.0,
                  olufsen_material_pressure=params['pref'],
                  outflow_bc_input_file=params['fpath_1d'],
-                 outflow_bc_type=params['bc_types'],
+                 outflow_bc_type=','.join(params['bc_types']),
                  outlet_face_names_input_file=fpath_outlets,
                  output_directory=params['fpath_1d'],
                  seg_min_num=params['seg_min_num'],
@@ -236,8 +244,8 @@ def main(db, geometries):
         #     continue
 
         # generate oneDSolver input file and check if successful
-        # msg = generate_1d(db, geo)
-        msg = generate_1d_api(db, geo)
+        msg = generate_1d(db, geo)
+        # msg = generate_1d_api(db, geo)
 
         # msg = None
         # if False:
