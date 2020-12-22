@@ -50,25 +50,20 @@ def run_rcr(Qfunc, time, p, distal_pressure):
     return run_network_util(block_list, deltat, time, bc_type = "rcr")
 
 
-def run_coronary(Qfunc, time, p, p_v_time, p_v_pres, cardiac_cycle_period):
-    # compute intramyocadial pressure derivative
-    p_v_time = p_v_time.tolist()
-    p_v_pres = p_v_pres.tolist()
-    dPvdt_f = np.zeros((len(p_v_time), 2))
-    dPvdt_f[:, 0] = p_v_time
-    deltat_temp = p_v_time[1] - p_v_time[0]
-    extended_time = np.array([p_v_time[0] - deltat_temp] + p_v_time + [p_v_time[-1] + deltat_temp]) # extend time beyond the first and last boundaries to get a periodic dPvdt
-    p_v_pres_extended = np.array([p_v_pres[-2]] + p_v_pres + [p_v_pres[1]])
-    dPvdt_f[:, 1] = np.gradient(p_v_pres_extended, extended_time)[1:-1]
-
-    distal_pressure = 0.0
+def run_coronary(Qfunc, time, p, p_im_time, p_im_pres, cardiac_cycle_period, Pv = 0.0):
     deltat = time[1] - time[0]
 
+    Pim_matrix = np.zeros((len(p_im_time), 2))
+    Pim_matrix[:, 0] = p_im_time
+    Pim_matrix[:, 1] = p_im_pres
+    distal_pressure = np.zeros((len(p_im_time), 2))
+    distal_pressure[:, 0] = p_im_time
+    distal_pressure[:, 1] = np.ones(len(p_im_time))*Pv # leaving Pv = 0.0 should be okay
+
     inflow = UnsteadyFlowRef(connecting_block_list=['coronary'], Qfunc=Qfunc, name='inflow', flow_directions=[+1])
-    coronary = OpenLoopCoronaryWithDistalPressureBlock(connecting_block_list=['inflow'], R1=p['R1'], C1=p['C1'],
-                                                       R2=p['R2'], C2=p['C2'], R3=p['R3'], dPvdt_f=dPvdt_f,
-                                                       cardiac_cycle_period=cardiac_cycle_period, Pv=distal_pressure,
-                                                       name='coronary', flow_directions=[-1])
+
+    coronary = OpenLoopCoronaryWithDistalPressureBlock_v2(Ra = p['R1'], Ca = p['C1'], Ram = p['R2'], Cim = p['C2'], Rv = p['R3'], Pim = Pim_matrix, Pv = distal_pressure, cardiac_cycle_period = cardiac_cycle_period, connecting_block_list = ['inflow'], name = 'coronary', flow_directions = [-1])
+
     block_list = [inflow, coronary]
 
     return run_network_util(block_list, deltat, time, bc_type = "coronary")

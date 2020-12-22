@@ -98,7 +98,7 @@ class wire:
 			raise Exception('Connecting elements to wire should be passed as a 2-tuple')
 		self.connecting_elements = connecting_elements
 
-		self.LPN_solution_ids = [None]*2
+		self.LPN_solution_ids = [None]*2 # i think there are 2 items in the list here because each wire should have to solution variables (P and Q) # LPN_solution_ids is a list that contains the index at which this wire's P and Q solutions are stored in the global vector of solution variables/unknown
 
 	def initialize_PQ(self,y,P,Q):
 		y[self.LPN_solution_ids[0]] = P
@@ -127,16 +127,17 @@ class LPNBlock:
 			self.flow_directions = [] # -1 : Inflow to block, +1 outflow from block
 		else :
 			self.flow_directions = flow_directions
-		self.LPN_solution_ids = []
+		self.LPN_solution_ids = [] # LPN_solution_ids for LPNBlock contains the solution IDs for the LPN block's internal solution variables; basically, LPN_solution_ids stores the index at which the LPNBlock's internal solution variables are stored in the global vector of solution variables/unknowns
 		self.emxcoe = []
 		self.fmxcoe = []
+		# are we missing a cveccoe initialization here?
 
 		# Tangent matrix coes
 		self.demxcoe = [] # sum_k[ydot_k(d(E_ik)/dy_j)]
 		self.dfmxcoe = [] # sum_k[y_k(d(F_ik)/dy_j)]
 		self.dcmxcoe = [] # (d(C_i)/dy_j)
 
-		self.eq_id_list = []
+		self.eq_id_list = [] # a list of the indices at which this LPNBlock's associated solution variables (Pin, Qin, Pout, Qout, and internal solutions) are stored in the global vector of solution variables/unknowns
 
 	def check_block_consistency(self):
 		return
@@ -160,13 +161,23 @@ class LPNBlock:
 	def eqids(self,wire_dict,local_eq):
 		# EqID returns variable's location in solution vector
 
-		nwirevars = self.num_connections*2
+		nwirevars = self.num_connections*2 # num_connections is multipled by 2 because each wire has 2 soltns (P and Q)
 		if local_eq < nwirevars :
 			vtype = local_eq%2 # 0 --> P, 1 --> Q
 			wnum = int(local_eq/2)
 
+			# example: assume num_connections is 2. this can be a normal resistor block, which has 2 connections. then this R block has 2 connecting wires. thus, this R block has 4 related solution variables/unknowns (P_in, Q_in, P_out, Q_out). note that local_eq = local ID.
+			# 	then for these are the vtypes we get for each local_eq:
+			# 		local_eq	: 	vtype 	: 	wnum
+			# 		0			: 	0		:	0		<---	vtype = pressure, wnum = inlet wire
+			# 		1			:	1		:	0		<---	vtype = flow, wnum = inlet wire
+			# 		2			:	0		:	1		<---	vtype = pressure, wnum = outlet wire
+			# 		3			:	1		:	1		<---	vtype = flow, wnum = outlet wire
+			#	note that vtype represents whether the solution variable in local_eq (local ID) is a P or Q solution
+			#		and wnum represents whether the solution variable in local_eq comes from the inlet wire or the outlet wire, for this LPNBlock with 2 connections (one inlet, one outlet)
+
 			return wire_dict[self.connecting_wires_list[wnum]].LPN_solution_ids[vtype]
-		else :
+		else : # this section will return the index at which the LPNBlock's  INTERNAL SOLUTION VARIABLES are stored in the global vector of solution unknowns/variables (i.e. I think RCR and OpenLoopCoronaryBlock have internal solution variables; these internal solution variables arent the P_in, Q_in, P_out, Q_out that correspond to the solutions on the attached wires, they are the solutions that are internal to the LPNBlock itself)
 			vnum = local_eq - nwirevars
 			return self.LPN_solution_ids[vnum]
 
@@ -177,7 +188,7 @@ class Junction(LPNBlock):
 	def __init__(self,connecting_block_list=None,name="NoNameJunction",flow_directions=None):
 		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
 		self.type = "Junction"
-		self.neq = self.num_connections
+		self.neq = self.num_connections # number of equations = num of blocks that connect to this junction, where the equations are 1) mass conservation 2) inlet pressures = outlet pressures
 
 
 	def add_connecting_block(self,block,direction):
@@ -894,6 +905,78 @@ class OpenLoopCoronaryWithDistalPressureBlock(LPNBlock):
 		self.dfmxcoe = [(0,)*3]*self.neq
 		self.dcmxcoe = [(0,)*3]*self.neq
 
+###################################################################
+class OpenLoopCoronaryWithDistalPressureBlock_v2(LPNBlock):
+	"Publication reference: Kim, H. J. et al. Patient-specific modeling of blood flow and pressure in human coronary arteries. Annals of Biomedical Engineering 38, 3195–3209 (2010)."
+
+	"open-loop coronary BC = RCRCR BC"
+
+	def __init__(self, Ra, Ca, Ram, Cim, Rv, Pim, Pv, cardiac_cycle_period, connecting_block_list = None, name = "NoNameCoronary", flow_directions = None):
+
+		LPNBlock.__init__(self,connecting_block_list,name=name,flow_directions=flow_directions)
+		self.type = "OpenLoopCoronaryWithDistalPressureBlock_v2"
+		self.neq = 2
+		self.num_block_vars = 1
+		self.Ra = Ra
+		self.Ca = Ca
+		self.Ram = Ram
+		self.Cim = Cim
+		self.Rv = Rv
+		self.Pa = 0.0
+		self.Pim = Pim
+		self.Pv = Pv
+		self.cardiac_cycle_period = cardiac_cycle_period
+
+	def get_P_at_t(self, P, t):
+		tt = P[:, 0]
+		P_val = P[:, 1]
+		ti, td = divmod(t, self.cardiac_cycle_period)
+		# import scipy
+		P_tt = np.interp(td, tt, P_val)
+		# P_tt = scipy.interpolate.CubicSpline(tt, P_val, bc_type = 'periodic')(td)
+		# import matplotlib.pyplot as plt
+		# plt.figure()
+		# plt.plot(P[:, 0], P[:, 1], label = "P")
+		# plt.show()
+		return P_tt
+
+	def check_block_consistency(self):
+		if len(connecting_block_list) != 1:
+			raise Exception("OpenLoopCoronaryWithDistalPressureBlock_v2 can be connected only to one elements")
+
+	def local_eq_coe_def(self,args):
+
+        # For this open-loop coronary BC, the ordering of solution unknowns is : (P_in, Q_in, V_im)
+		# where V_im is the volume of the second capacitor, Cim
+		# Q_in is the flow through the first resistor
+		# and P_in is the pressure at the inlet of the first resistor
+		ttt = args['Time']
+
+		self.emxcoe = [(-1.0*self.Ca*self.Cim*self.Rv, self.Ra*self.Ca*self.Cim*self.Rv, -1.0*self.Cim*self.Rv), (0.0, 0.0, -1.0*self.Cim*self.Rv*self.Ram)]
+
+		self.fmxcoe = [(0.0, self.Cim*self.Rv, -1.0), (self.Cim*self.Rv, -1.0*self.Cim*self.Rv*self.Ra, -1.0*(self.Rv + self.Ram))]
+
+		Pim_value = self.get_P_at_t(self.Pim, ttt)
+		Pv_value = self.get_P_at_t(self.Pv, ttt)
+
+		# Pim_func = lambda t: np.interp(t, self.Pim[:, 0], self.Pim[:, 1])
+		# Pv_func = lambda t: self.Pv[:, 1][0] + (t - t)
+
+		# Pim_value = Pim_func(ttt)
+		# print("Pim_value = ", Pim_value)
+		# Pv_value = Pv_func(ttt)
+		# print("Pv_value = ", Pv_value)
+		# input("")
+        # last here - there is something wrong here because i am doing the exact same thing as earlier, but now it is not working. the only difference that instead of making a lambda function in run_0d_solver and then sending it OpenLoopCoronaryWithDistalPressureBlock_v2, I sent a matrix to OpenLoopCoronaryWithDistalPressureBlock_v2 and use that matrix to create the lambda function from within OpenLoopCoronaryWithDistalPressureBlock_v2. These 2 methods should be equivalent, so whats going on here. did i actually do something different earlier??
+
+		# print("Pim_value = ", Pim_value)
+		self.cveccoe = [-1.0*self.Cim*Pim_value + self.Cim*Pv_value, -1.0*self.Cim*(self.Rv + self.Ram)*Pim_value + self.Ram*self.Cim*Pv_value]
+
+		self.demxcoe = [(0,)*3]*self.neq
+		self.dfmxcoe = [(0,)*3]*self.neq
+		self.dcmxcoe = [(0,)*3]*self.neq
+###############################################################
+
 # -- Time Varying Capacitance
 class TimeDependentCapacitance(LPNBlock):
 	def __init__(self,Cfunc,connecting_block_list=None,name="NoNameTimeDependentCapacitance",flow_directions=None):
@@ -1179,19 +1262,19 @@ def connect_blocks_by_inblock_list(block_list): # this function, not connect_blo
 		for bBnm in bA.connecting_block_list:
 			id_bB = bnames.index(bBnm)
 			bB = block_list[id_bB]
-			i+=1
+			i+=1 # i is the index at which block, bB, is located in block bA's connecting_block_list
 			if bA.flow_directions[i]==+1 and (id_bA,id_bB) not in connectivity :
 				name_wire = bA.name+'_'+bB.name
 				connecting_elements = (block_list[id_bA],block_list[id_bB])
 				# wire_dict[name_wire] = wire(connecting_elements,name=name_wire)
-				connectivity.append((id_bA,id_bB))
+				connectivity.append((id_bA,id_bB)) # connectivity stores pair-wise tuples of indices of the blocks that are connected; basically, if block 1 is connected to block 2 and the flow goes from block 1 to block 2, then connectivity will store a 2-element tuple, where the first element is the index at which block 1 is stored in block_list and the 2nd element is the index at which block 2 is stored in block_list. if the flow goes from block 2 to block 1, then connectivity will store a 2-element tuple, where the first element is the index at which block 2 is stored in block_list and the 2nd element is the index at which block 1 is stored in block_list.
 			elif bA.flow_directions[i]==-1 :
 				name_wire = bB.name+'_'+bA.name
 				connecting_elements = (block_list[id_bB],block_list[id_bA])
 			# 	block_list[id_bA].add_connecting_wire(name_wire)
 			# 	block_list[id_bB].add_connecting_wire(name_wire)
 			else :
-				continue
+				continue # if this line is executed, then the next two lines (wire_dict[name_wire] = ... and block_list[id_bA] = ...) will not be executed
 			wire_dict[name_wire] = wire(connecting_elements,name=name_wire)
 			block_list[id_bA].add_connecting_wire(name_wire)
 
@@ -1224,15 +1307,9 @@ def connect_blocks_by_connectivity_list(block_list,connectivity):
 		# print block_list[e2].name, block_list[e2].flow_directions
 
 	# print wire_dict
-
-
-
-
 	return wire_dict
 
-
 def check_block_connection(block):
-
 
 	if len(block.flow_directions) != block.num_connections :
 
@@ -1241,7 +1318,6 @@ def check_block_connection(block):
 		print("Block number of eqs: ",block.num_connections)
 
 		raise Exception("Number of connections donot match the number of inflows+outflows for this block")
-
 
 	# print block.connecting_wires_list
 	reorder_inblock_connectivity(block)
@@ -1269,8 +1345,11 @@ def compute_neq(block_list,wire_dict):
 
 	# print("Number of equations : ",neq)
 
+	# print("Number of unknowns = ", 2*len(wire_dict.values()) + block_vars) # wire_dict.values() gives me an iterable or whatever whose length is the number of wires in wire_dict (number of wires in our model). then we multiply by 2, because each wire has 2 solution variables (P and Q).
+	# print("Number of equations = ", neq) # number of unknowns (solutionv variables) = 2*len(wire_dict.values()) + block_vars
 	if 2*len(wire_dict.values()) + block_vars != neq :
-		print("Expected number of variables : ", 2*len(wire_dict) + block_vars)
+		# print("Expected number of variables : ", 2*len(wire_dict) + block_vars)
+		# print("Number of equations = ", neq)
 		raise Exception('Mismatch between number of variables and equations')
 
 	return neq
@@ -1278,28 +1357,32 @@ def compute_neq(block_list,wire_dict):
 
 def initialize_solution_structures(neq):
 	# Return y,ydot
-	return np.zeros(neq),np.zeros(neq)
+	return np.zeros(neq),np.zeros(neq) # recall that neq = number of solution variables = num of unknowns. thus, the global solution vector, y, should be of length neq
 
 def initialize_solution_matrices(neq):
 	# Return E,F,C,dE,dF,dC
 	return np.zeros((neq,neq)),np.zeros((neq,neq)),np.zeros(neq),np.zeros((neq,neq)),np.zeros((neq,neq)),np.zeros((neq,neq))
 
-def assign_global_ids(block_list,wire_dict):
+def assign_global_ids(block_list,wire_dict): # this function is where aekaansh assigns the global ids for the solution variables for the wires and blocks
 
 	# Ordering of solution variables :
-	# P0,Q0,P1,Q1,...,Pn,Qn, V1,V2,..,Vm
+	# P0,Q0,P1,Q1,...,Pn,Qn, V1,V2,..,Vm # note that "V" stands for internal solution variable (of a block)
+	# so the ordering of solution variables in the global vector of solution variables is: wire solutions first and then blocks' internal solutions
 
-	i = 0
+	i = 0 # i = the index at which a solution variable/unknown is stored in the global vector of solution variables/unknowns
 
 	var_name_list = []
 
-	for w in wire_dict.values():
+	# note that a solution ID = the index at which a solution variable is located in the global vector of solution variables
+
+	for w in wire_dict.values(): # assign the wire solutions here (i.e. each wire has a P and Q solution. recall that each block, ie resistance block, has 2 associated wires and thus each block has 4 associated solutions (Pin, Qin, Pout, Qin). so here, we are assigning those solution ids in the global solution vector for those P and Q solutions
+		# note that because wire_dict is a dictionary, it is unordered and basically, everytime we call wire_dict and loop through its values or keys or whatever, there is no set order of wires that we will follow and loop through.
 		w.LPN_solution_ids = [i,i+1]
 		var_name_list.append('P_'+w.name)
 		var_name_list.append('Q_'+w.name)
 		i+=2
 
-	for b in block_list :
+	for b in block_list : # here, we assign the solution ids for the internal solutions of the LPNBlocks
 		b.LPN_solution_ids = []
 		for j in range(b.num_block_vars):
 			b.LPN_solution_ids.append(i)
@@ -1308,31 +1391,35 @@ def assign_global_ids(block_list,wire_dict):
 
 
 	for b in block_list :
-		for local_id in range(b.num_block_vars+2*len(b.connecting_block_list)):
-			b.eq_id_list.append(b.eqids(wire_dict,local_id))
+		for local_id in range(b.num_block_vars+2*len(b.connecting_block_list)): # note that b.num_block_vars+2*len(b.connecting_block_list) = the total number of solution variables/unknowns associated with this LPNBlock. len(b.connecting_block_list) is the number of wires (and blocks) attached to the current LPNBlock and this number is multiplied by 2 because each wire has 2 solutions (P and Q). then, the block also has internal solutions, where the number of internal solutions that it has is = b.num_block_vars
+			b.eq_id_list.append(b.eqids(wire_dict,local_id)) # b.eqids returns the index at which the block's solution variable corresponding to local_id is located in the global vector of solution variables/unknowns.
+
+			# recall that eq_id_list is a list of the indices at which this LPNBlock's associated solution variables (Pin, Qin, Pout, Qout, and internal solutions) are stored in the global vector of solution variables/unknowns
 
 	# print var_name_list
 
 	return var_name_list
 
 def assemble_structures(E,F,C,dE,dF,dC,args,block_list):
-	ieq = 0
+	ieq = 0 # index of the rows of E, F, C. recall that each row corresponds to a different equation.
 	wire_dict = args['Wire dictionary']
+
+	# in this function, assemble_structures, we are basically taking all of the LPNBlock's associated equations and putting them or assembling them into our global E, F, C, dE, etc matrices. where each row in this global matrix equation system corresponds to each equation from our LPNBlocks. recall that we developed each LPNBlock's associated equations in their demxcoe, dfmxcoe, cveccoe, etc in their local_eq_coe_def functions. now, we want to take all of the equations prescribed prescribed local_eq_coe_def and place them into the global E, F, C etc matrices to construct a global matrix system of equations that we will solve
 
 	for b in block_list :
 		# print "Setting up E equations for "+b.name
-		b.local_eq_coe_def(args)
-		for tpl in b.emxcoe :
-			ientry = 0
+		b.local_eq_coe_def(args) # this function sets up LPNBlock b's emxcoe, fmxcoe, cveccoe, dfmxcoe, etc
+		for tpl in b.emxcoe : # tpl = tuple
+			ientry = 0 # current index in b.eq_id_list
 			for t in tpl :
-				E[ieq,b.eq_id_list[ientry]] = t
+				E[ieq,b.eq_id_list[ientry]] = t # recall that eq_id_list is a list of the indices at which this LPNBlock's associated solution variables (Pin, Qin, Pout, Qout, and internal solutions) are stored in the global vector of solution variables/unknowns. thus, b.eq_id_list[ientry] gives me the index at which b's ientry-th solution variable is stored in the global vector of solution variables. this makes sense because b.eq_id_list[ientry] is in the column of E, and since E is multiplied by the global vector of solution variables, b.eq_id_list[ientry] is be the column of E.
 				ientry += 1
 			# if len(tpl)!= 0 :
 				# print E[ieq,:]
 			ieq+=1
 
 
-	ieq = 0
+	ieq = 0 # currently here 8/26/20: one way to get faster speed up in the assemble_structures routine is to combine all of these individual for-loop sections to construct E, F, C, dE, dF, dC individually into one big for-loop there will loop through the block_list (for b in block_list) only once, rather than 6 different times (as is currently done in this assemble_structures function)
 	for b in block_list :
 		# print "Setting up F equations for "+b.name
 		for tpl in b.fmxcoe :
@@ -1401,6 +1488,8 @@ def assemble_structures(E,F,C,dE,dF,dC,args,block_list):
 
 # Generalized alpha matrix solve for constant coe E,F,C
 # Mid-steps re-added for ya_f and ydota_m
+
+# last here 8/23/20, 11:17am - in order to understand the below functions, i think i have to understand what the generalized alpha method is first. need to read the jansen paper
 
 def form_matrix_NR(E,F,dE,dF,dC,alpha_f,alpha_m,gamma,dt):
 
@@ -1574,7 +1663,7 @@ def gen_alpha_dae_integrator_NR(y,ydot,t,block_list,args,dt,rho,nit=16):
 	res0 = form_rhs_NR(E,F,C,yaf,ydotam)
 	res = res0
 	# print "time = ", t, " , Max residual (outside while loop) = ", max(abs(res0))
-	while max(abs(res0)) > 5e-4 and iit < nit:
+	while max(abs(res0)) > 5e-6 and iit < nit:
 
 		damping = 1.
 
@@ -1713,7 +1802,10 @@ class Junction_special(LPNBlock):
 		self.neq = self.num_connections
 		self.temp_parameter = temp_parameter
 
-		# input("Junction_special - click to continue")
+		print("------------------------------------------")
+		print("Junction_special - click to continue")
+		print("temp_parameter = ", self.temp_parameter)
+		print("------------------------------------------")
 
 
 	def add_connecting_block(self,block,direction):
@@ -1728,8 +1820,6 @@ class Junction_special(LPNBlock):
 		# Number of variables per tuple = 2*num_connections
 		# Number of equations = num_connections-1 Pressure equations, 1 flow equation
 		# Format : P1,Q1,P2,Q2,P3,Q3, .., Pn,Qm
-
-		# print("\ntemp_parameter = ", self.temp_parameter)
 
 		self.emxcoe = [(0,)*(2*self.num_connections)]*(self.num_connections)
 
