@@ -19,6 +19,7 @@ from vtk.util.numpy_support import vtk_to_numpy as v2n
 from get_bcs import get_bcs, get_params
 from vtk_functions import read_geo
 from common import get_dict
+from common import coronary_sv_to_oned
 
 
 def input_args(description):
@@ -132,13 +133,15 @@ class Database:
             # pick all geometries in rest state
             geometries = []
             for geo in self.get_geometries():
-                params = self.get_params(geo)
-                if params['sim_physio_state'] == 'rest':
+                bcs = self.get_bcs(geo)
+                if bcs is None:
+                    continue
+                if bcs['params']['sim_physio_state'] == 'rest':
                     geometries += [geo]
 
             # exclude geometries
             geometries = self.exclude_geometries(geometries)
-        elif name =='coarctation':
+        elif name == 'coarctation':
             geometries = ['0066_0001', '0067_0001', '0068_0001', '0069_0001', '0070_0001', '0071_0001', '0072_0001',
                           '0073_0001', '0074_0001', '0106_0001', '0107_0001', '0111_0001', '0090_0001', '0091_0001',
                           '0092_0001', '0093_0001', '0094_0001', '0095_0001', '0101_0001', '0102_0001', '0103_0001',
@@ -328,18 +331,29 @@ class Database:
         # return os.path.join(self.get_sv_meshes(geo), 'initial_pressure.vtu')
         return os.path.join(self.fpath_gen, 'initial_pressure', geo + '.vtu')
 
+    def get_asymptotic(self, geo):
+        return os.path.join(self.fpath_gen, 'asymptotic', geo + '.vtu')
+
     def get_initial_conditions_steady(self, geo):
-        # return os.path.join(self.get_sv_meshes(geo), 'initial_pressure.vtu')
         return os.path.join(self.fpath_gen, 'steady', geo + '.vtu')
 
+    def get_initial_conditions_steady0(self, geo):
+        return os.path.join(self.fpath_gen, 'steady0', geo + '.vtu')
+
+    def get_initial_conditions_irene(self, geo):
+        return os.path.join(self.fpath_gen, 'irene', geo + '.vtu')
+
     def get_sv_initial_conditions(self, geo):
-        return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['simulations'], geo, 'mesh-complete', 'initial.vtu')
+        return os.path.join(self.get_svproj_dir(geo), self.svproj.dir['simulations'], geo, 'mesh-complete',
+                            'initial.vtu')
 
     def get_bc_comparison_path(self, geo, m):
-        return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.png')
+        return self.gen_file('0d_flow_from_3d', geo, 'png')
+        # return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.png')
 
     def get_bc_0D_path(self, geo, m):
-        return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.npy')
+        return self.gen_file('0d_flow_from_3d', geo)
+        # return os.path.join(self.fpath_gen, 'bcs_' + m, geo + '.npy')
 
     def gen_dir(self, name):
         fdir = os.path.join(self.fpath_study, name)
@@ -450,8 +464,14 @@ class Database:
     def get_3d_3d_comparison(self):
         return os.path.join(self.gen_file('3d_3d_comparison', '', ''), '3d_3d_comparison.npy')
 
+    def get_convergence_path(self):
+        return os.path.join(self.gen_file('statistics', '', ''), 'convergence.npy')
+
     def add_3d_3d_comparison(self, geo, err):
         self.add_dict(self.get_3d_3d_comparison(), geo, err)
+
+    def add_convergence(self, geo, err):
+        self.add_dict(self.get_convergence_path(), geo, err)
 
     def get_1d_geo(self, geo):
         return os.path.join(self.get_solve_dir_1d(geo), geo + '.vtp')
@@ -639,6 +659,12 @@ class Database:
 
         return res
 
+    def get_3d_numstep(self, geo):
+        # get model parameters
+        bc_def = self.get_bcs(geo)
+
+        return int(float(bc_def['params']['sim_steps_per_cycle']))
+
     def get_3d_timestep(self, geo):
         # get model parameters
         bc_def = self.get_bcs(geo)
@@ -647,7 +673,7 @@ class Database:
         time, inflow = self.get_inflow(geo)
 
         # number of time steps
-        numstep = int(float(bc_def['params']['sim_steps_per_cycle']))
+        numstep = self.get_3d_numstep(geo)
 
         # time step
         return time[-1] / numstep
@@ -675,6 +701,34 @@ class Database:
             return nt_out[0]
         else:
             return 1
+
+    def get_time_constants(self, geo):
+        params = self.get_bcs(geo)
+        time, _ = self.get_inflow(geo)
+
+        # skip geometries without BCs
+        if params is None:
+            return
+
+        # collect all time constants
+        tau_bc = {}
+        for cp, bc in params['bc'].items():
+            if 'Rd' in bc:
+                tau = bc['Rd'] * bc['C']
+            elif 'Pim' in bc:
+                p = {}
+                cor = coronary_sv_to_oned(bc)
+                p['R1'], p['R2'], p['R3'], p['C1'], p['C2'] = (cor['Ra1'], cor['Ra2'], cor['Rv1'], cor['Ca'], cor['Cc'])
+                tau1 = p['C1'] / (1 / (p['R2'] + p['R1']) + 1 / p['R3'])
+                tau2 = p['C2'] / (1 / (p['R2'] + p['R3']) + 1 / p['R1'])
+                tau = tau1 + tau2
+            else:
+                tau = 0
+
+            #  tau in cardiac cycles
+            tau_bc[cp] = tau / time[-1]
+
+        return tau_bc
 
 
 class SimVascular:
@@ -758,8 +812,17 @@ class Post:
 
         # sets the plot order
         # self.models = ['3d', '1d']
+        # self.models = ['3d_rerun', '1d']
         self.models = ['3d', '3d_rerun']
         # self.models = ['3d', '3d_rerun_bc']
+
+        self.colors = {'Cerebrovascular': 'k',
+                       'Coronary': 'r',
+                       'Aortofemoral': 'm',
+                       'Pulmonary': 'c',
+                       'Congenital Heart Disease': 'y',
+                       'Aorta': 'b',
+                       'Animal and Misc': '0.75'}
 
 
 def run_command(run_folder, command):
