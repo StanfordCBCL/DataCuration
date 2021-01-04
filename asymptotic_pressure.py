@@ -24,7 +24,7 @@ from simulation_io import get_dict, get_caps_db, collect_results_db_3d_3d, colle
 from get_sv_project import coronary_sv_to_oned
 from get_statistics_bc import collect_errors
 
-fsize = 20
+fsize = 12
 plt.rcParams.update({'font.size': fsize})
 # plt.style.use('dark_background')
 
@@ -35,34 +35,58 @@ def plot_correlation(db):
     # get numerical time constants
     res_num = get_dict(db.get_convergence_path())
 
-    for f in ['pressure', 'flow']:
-        fig1, ax1 = plt.subplots(dpi=400, figsize=(15, 6))
+    # only plot subset of geometries
+    geometries_paper = db.get_geometries_select('paper')
+
+    # convergence criterion
+    tol = 0.01
+
+    fig1, ax1 = plt.subplots(1, 2, dpi=300, figsize=(12, 4), sharex='row')
+
+    for pos, f in enumerate(['pressure', 'flow']):
+
         i_conv_all = []
         tau_all = []
         for geo in res_num:
+            if geo not in geometries_paper:
+                continue
             params = db.get_bcs(geo)
+
+            # skip non-RCR models
+            types = np.unique(list(params['bc_type'].values()))
+            if not len(types) == 1 or not types[0] == 'rcr':
+                continue
+
             i_conv = res_num[geo]['i_conv'][f]
             tau = np.mean(res_num[geo]['tau'][f])
             col = post.colors[params['params']['deliverable_category']]
-            ax1.plot(tau, i_conv, marker='x', color=col)
+            ax1[pos].plot(tau, i_conv, marker='o', color=col)
             i_conv_all += [i_conv]
             tau_all += [tau]
 
         # fit linear equation to data
         if db.study == '1spb_length' and f == 'pressure':
-            coef = np.polyfit(tau_all, i_conv_all, 1)
-            poly = np.poly1d(coef)
-            ax1.plot(tau_all, poly(tau_all), 'k-')
+            # coef = np.polyfit(tau_all, i_conv_all, 1)
+            # poly = np.poly1d(coef)
+            # ax1.plot(tau_all, poly(tau_all), 'k-')
+
+            t = np.linspace(0, 10, num=10000)
+            fx = - np.log(tol) * t
+            ax1[pos].plot(t, fx.astype(int) + 1, 'k-')
 
         # plt.yscale('log')
-        ax1.xaxis.grid('minor')
-        ax1.yaxis.grid(True)
-        # ax1.set_ylim(0, 13)
-        plt.xlabel('Time constant [cycles]')
-        plt.ylabel('Number of cardiac cycles [-]')
-        fname = os.path.join(db.get_statistics_dir(), 'correlation_' + f + '.png')
-        fig1.savefig(fname, bbox_inches='tight')
-        plt.close(fig1)
+        ax1[pos].set_title(f.capitalize())
+        ax1[pos].xaxis.grid('minor')
+        ax1[pos].yaxis.grid(True)
+        ax1[pos].set_xlim(0, 10)
+        ax1[pos].set_ylim(0, 50)
+        ax1[pos].set_xlabel(r'Model time constant $\bar{\tau}/T$ [-]')
+        if pos == 0:
+            ax1[pos].set_ylabel(r'Number of cardiac cycles [-]')
+
+    fname = os.path.join(db.get_statistics_dir(), 'correlation.png')
+    fig1.savefig(fname, bbox_inches='tight')
+    plt.close(fig1)
 
 
 def plot_convergence(db):
@@ -101,6 +125,12 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
     post = Post()
     t = 0
 
+    # study names
+    studies = {'ini_zero': 'Zero',
+               'ini_steady': 'Steady',
+               'ini_irene': 'Steady (start from mean)',
+               'ini_1d_quad': '1D'}
+
     # get caps
     caps = get_caps_db(db, geo)
     del caps['inflow']
@@ -133,12 +163,16 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
     e_thresh = 'asymptotic'
 
     # get numerical time constant
-    # tau_num = get_dict(db.get_convergence_path())
-    # tau = np.mean(tau_num[geo]['pressure'])
-    # alpha = 1 / (np.exp(time[m][-1] / tau) - 1)
-    # thresh_cyclic = thresh / alpha
-    thresh_cyclic = 0
-
+    res_num = get_dict(db.get_convergence_path())
+    if geo in res_num:
+        tau = np.mean(res_num[geo]['tau']['pressure'])
+        alpha = 1 / (np.exp(1 / tau) - 1)
+        thresh_cyclic = thresh / alpha
+    else:
+        thresh_cyclic = np.nan
+    # thresh_cyclic = 0
+    # pdb.set_trace()
+    #
     # collect results
     res_m_all = []
     res_m_t = []
@@ -162,19 +196,22 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
         res_qm_t += [resistance * np.mean(res_m[br]['flow'][m + '_cap'])]
 
     # make plot
-    xticks = [1, 16]
+    c_max = 20
     x_min = 1
+    style = 'x-'
     if p == 'cycle':
         title = 'Solution'
         x_min = 0
-        xticks += [0]
+        style = '-'
         x = time[m + '_all'] / time[m][-1]
         y = np.array(res_m_all).T * post.convert[f]
+        xticks = [0]
         ylabel = f.capitalize() + ' [' + post.units[f] + ']'
     elif p == 'cycle_norm':
         title = 'Normalized solution'
         x_min = 0
-        xticks += [0]
+        xticks = [0]
+        style = '-'
         x = time[m + '_all'] / time[m][-1]
         y = np.array(res_m_all).T / np.array(res_m_m)[:, -1]
         ylabel = f.capitalize() + ' [-]'
@@ -182,31 +219,34 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
         title = 'Initial values'
         x = cycles
         y = np.array(res_m_t).T * post.convert[f]
+        xticks = [1]
         ylabel = 'Initial ' + f + ' [' + post.units[f] + ']'
     elif p == 'mean':
         title = 'Mean cycle solution'
         x = cycles[1:]
         y = np.array(res_m_m).T * post.convert[f]
         y /= y[-1]
-        xticks += [1]
+        xticks = [1]
         # ylabel = 'Mean ' + f + ' [' + post.units[f] + ']'
         ylabel = 'Mean ' + f + ' [-]'
     elif p in 'cyclic':
-        title = 'Cyclic error'
-        x = cycles[1:-1]
+        title = 'Cyclic error $\epsilon_n$'
+        x = cycles[1:-1] + 1
         y = errors['cyclic'][f]
-        # xticks += [2]
+        xticks = [2]
         ylabel = 'Cyclic ' + f + ' error [-]'
     elif p in 'asymptotic':
-        title = 'Asymptotic error'
-        x = cycles[1:]
-        y = errors['asymptotic'][f]
-        xticks += [1]
+        title = 'Asymptotic error $\epsilon_\infty$'
+        x = cycles[1:-1]
+        y = errors['asymptotic'][f][:-1]
+        xticks = [1]
         ylabel = 'Asymptotic ' + f + ' error [-]'
     else:
         title = ''
         x = np.nan
         y = np.nan
+        xticks = []
+    xticks += [c_max]
 
     # converged time step
     conv = np.where(np.all(errors[e_thresh][f] < thresh, axis=1))[0]
@@ -230,9 +270,10 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
         ax[pos].set_ylim([0, 1.2])
         # ax.plot([cycles[0], cycles[-1]], np.vstack((res_qm_t, res_qm_t)) * post.convert[f], '--')
 
-    ax[pos].plot(x, y, '-')
+    ax[pos].plot(x, y, style)
     ax[pos].axvline(x=i_conv, color='k')
-    ax[pos].set_ylabel(ylabel)
+    if not title_study or pos[1] == 0:
+        ax[pos].set_ylabel(ylabel)
     x_eps = 0.5 * np.max(xticks) / 20
     ax[pos].set_xlim([x_min - x_eps, np.max(xticks) + x_eps])
     # ax[pos].set_xlim([0, np.max(x)])
@@ -241,7 +282,10 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
 
     if p in ['cyclic', 'asymptotic']:
         ax[pos].set_yscale('log')
-        ax[pos].set_ylim([1.0e-4, 1])
+        if f == 'pressure':
+            ax[pos].set_ylim([1e-4, 1])
+        elif f == 'flow':
+            ax[pos].set_ylim([1e-5, 1e-1])
         # ax[pos].yaxis.set_major_formatter(mtick.PercentFormatter(1.0, 2))
     if p == 'cyclic' and e_thresh == 'asymptotic':
         ax[pos].plot([0, 999], [thresh_cyclic, thresh_cyclic], 'k-')
@@ -249,43 +293,61 @@ def make_err_plot(db, geo, ax, pos, m, f, p, res_m, errors, time, title_study=''
         ax[pos].plot([0, 999], [thresh, thresh], 'k-')
     if pos[0] == 1:
         ax[pos].set_xlabel('Cardiac cycle [-]')
-    if title_study:
-        ax[pos].set_title(title_study)
-    elif pos[0] == 0:
-        ax[pos].set_title(title)
+    if pos[0] == 0:
+        if title_study:
+            ax[pos].set_title(studies[title_study])
+        else:
+            ax[pos].set_title(title)
     ax[pos].set_prop_cycle(plt.rcParams['axes.prop_cycle'])
 
     return y, i_conv
 
 
 def get_time_constants(db, geo, c_res):
-    alpha = {}
-    tau = {}
+    const = defaultdict(dict)
 
-    # time constants (analytical)
+    # get cap names
     tau_ana_dic = db.get_time_constants(geo)
     caps = get_caps_db(db, geo)
     del caps['inflow']
-    tau['ana'] = np.array([tau_ana_dic[c] for c in caps])
+    n_out = len(caps)
+
+    # time constants (analytical)
+    const['tau']['ana'] = np.array([tau_ana_dic[c] for c in caps])
 
     # factor between asymptotic and cyclic error (analytical)
-    alpha['ana'] = 1 / (np.exp(1 / tau['ana']) - 1)
+    const['alpha']['ana'] = 1 / (np.exp(1 / const['tau']['ana']) - 1)
 
-    alpha['num'] = {}
-    tau['num'] = {}
+    const['tau']['num'] = {}
+    const['alpha']['num'] = {}
+
+    # tolerance for the linear slope in a log-plot
+    tol = {'pressure': 1e-10,
+           'flow': 1e-6}
+
     for f in c_res.keys():
+        # # chose range of cardiac cycles to evaluate time constants (within given tolerance)
+        i_min = -1
+        i_good = np.sum(np.abs(np.diff(-np.diff(np.log(c_res[f]['cyclic']), axis=0), axis=0)) < tol[f], axis=1) == n_out
+        for i, g in enumerate(i_good):
+            if i_min == -1 and g:
+                i_min = i
+                continue
+            if i_min > -1 and not g:
+                i_max = i - 1
+                break
+        else:
+            i_min = 0
+            i_max = np.min([10, c_res[f]['cyclic'].shape[0] - 1])
+        i_calc = np.arange(i_min, i_max)
+
         # time constants (numerical)
-        n_max = 5
-        tau['num'][f] = 1 / np.mean(-np.diff(np.log(c_res[f]['cyclic'][:n_max]), axis=0), axis=0)
+        const['tau']['num'][f] = 1 / np.mean(-np.diff(np.log(c_res[f]['cyclic'][i_calc]), axis=0), axis=0)
 
         # factor between asymptotic and cyclic error (numerical)
-        alpha['num'][f] = c_res[f]['asymptotic'][1:] / c_res[f]['cyclic']
+        const['alpha']['num'][f] = np.mean(c_res[f]['asymptotic'][i_calc + 1] / c_res[f]['cyclic'][i_calc], axis=0)
 
-        # find convergence dominating outlet
-        # i_conv = np.argmin(np.abs(tau['num'][f] / tau['ana'] - 1))
-        # cap_conv = list(caps.keys())[i_conv]
-
-    return alpha, tau
+    return const
 
 
 def plot_pressure(study, geo):
@@ -298,8 +360,8 @@ def plot_pressure(study, geo):
     # comparisons = ['cycle', 'initial', 'cyclic', 'asymptotic']
     # comparisons = ['cycle', 'mean', 'asymptotic']
     # comparisons = ['cycle', 'mean', 'cyclic', 'asymptotic']
-    # comparisons = ['cycle', 'mean', 'cyclic', 'asymptotic']
-    comparisons = ['cycle_norm', 'mean', 'cyclic', 'asymptotic']
+    comparisons = ['cycle', 'mean', 'cyclic', 'asymptotic']
+    # comparisons = ['cycle_norm', 'mean', 'cyclic', 'asymptotic']
 
     # get database
     db = Database(study)
@@ -348,31 +410,22 @@ def plot_pressure(study, geo):
     plt.close(fig)
 
     # plot time constants
-    alpha, tau = get_time_constants(db, geo, c_res)
+    const = get_time_constants(db, geo, c_res)
     for f in fields:
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
-        ax.plot(alpha['num'][f])
-        # ax.plot(np.tile(alpha_ana, (alpha_num.shape[0], 1)), 'k')
-        ax.plot([0, len(alpha['num'][f])], np.repeat(np.mean(alpha['ana']), 2), 'k')
-        ax.grid('both')
-        os.makedirs(os.path.join(f_out, 'alpha'), exist_ok=True)
-        fpath = os.path.join(f_out, 'alpha', 'alpha_' + study + '_' + geo + '_' + f + '.png')
-        fig.savefig(fpath, bbox_inches='tight')
-        plt.close(fig)
+        for c, v in const.items():
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
+            ax.plot(const[c]['ana'], 'o')
+            ax.plot(const[c]['num'][f], 'x')
+            ax.grid('both')
+            ax.legend(['analytical', 'numerical'])
+            ax.set_xlabel('Outlet')
+            ax.set_ylabel(c)
+            os.makedirs(os.path.join(f_out, c), exist_ok=True)
+            fpath = os.path.join(f_out, c, c + '_' + study + '_' + geo + '_' + f + '.png')
+            fig.savefig(fpath, bbox_inches='tight')
+            plt.close(fig)
 
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
-        ax.plot(tau['ana'], 'o')
-        ax.plot(tau['num'][f], 'x')
-        ax.grid('both')
-        ax.legend(['analytical', 'numerical'])
-        ax.set_xlabel('Outlet')
-        ax.set_ylabel('Time constant [s]')
-        os.makedirs(os.path.join(f_out, 'tau'), exist_ok=True)
-        fpath = os.path.join(f_out, 'tau', 'tau_' + study + '_' + geo + '_' + f + '.png')
-        fig.savefig(fpath, bbox_inches='tight')
-        plt.close(fig)
-
-    return {'tau': tau['num'], 'i_conv': i_conv}
+    return {'tau': const['tau']['num'], 'i_conv': i_conv}
 
 
 def plot_pressure_studies(geo):
@@ -380,13 +433,14 @@ def plot_pressure_studies(geo):
     m = '3d_rerun'
     fields = ['pressure', 'flow']
     # studies = ['ini_zero', 'ini_steady', 'ini_1d_quad']
-    # studies = ['ini_zero', 'ini_irene', 'ini_1d_quad']
-    studies = ['ini_1d_quad', 'ini_asymp_pres_1d_velo', 'ini_1d_pres_asymp_velo']
+    # studies = ['ini_zero', 'ini_steady', 'ini_irene', 'ini_1d_quad']
+    studies = ['ini_zero', 'ini_irene', 'ini_1d_quad']
+    # studies = ['ini_1d_quad', 'ini_asymp_pres_1d_velo', 'ini_1d_pres_asymp_velo']
     comparison = 'asymptotic'
     # comparison = 'mean'
 
     print(geo)
-    fig, ax = plt.subplots(len(fields), len(studies), figsize=(8 * len(studies), 5 * len(fields)), dpi=300, sharey=True)
+    fig, ax = plt.subplots(len(fields), len(studies), figsize=(6 * len(studies), 5 * len(fields)), dpi=300, sharey='row')
 
     for j, f in enumerate(fields):
         for i, p in enumerate(studies):
@@ -423,7 +477,6 @@ def main(db, geo):
     for g in geo:
         # plot_pressure_studies(g)
         res = plot_pressure(db.study, g)
-
         if res is not None:
             db.add_convergence(g, res)
 
@@ -431,6 +484,6 @@ def main(db, geo):
 if __name__ == '__main__':
     descr = 'Make plots for 3D-1D-0D paper'
     d, g, _ = input_args(descr)
-    main(d, g)
+    # main(d, g)
     # plot_convergence(d)
-    # plot_correlation(d)
+    plot_correlation(d)
