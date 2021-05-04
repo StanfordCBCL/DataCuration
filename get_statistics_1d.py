@@ -33,7 +33,11 @@ def print_error(db, geometries):
     folder = db.get_statistics_dir()
 
     # get simulation errors
-    res_all = get_dict(db.get_1d_3d_comparison())
+    m_rom = '0d'
+    if m_rom == '0d':
+        res_all = get_dict(db.get_0d_3d_comparison())
+    if m_rom == '1d':
+        res_all = get_dict(db.get_1d_3d_comparison())
 
     # use only geometries in selection
     res = {}
@@ -43,7 +47,7 @@ def print_error(db, geometries):
 
     # make plots
     # plot_error_spatial(db, geometries)
-    plot_error_centerline(db, res, folder)
+    # plot_error_centerline(db, res, folder)
     plot_err_bar(res, folder)
     plot_scatter(db, res, 'pts')
     plot_scatter(db, res, 'img')
@@ -125,7 +129,7 @@ def plot_scatter(db, res, mode):
     plt.rcParams.update({'font.size': fsize})
     plt.rcParams['axes.linewidth'] = 2
 
-    combinations = [['flow', 'pressure'], ['area', 'flow'], ['area', 'pressure']]
+    combinations = [['flow', 'pressure']]#, ['area', 'flow'], ['area', 'pressure']]
     domain = {'cap': 'at caps', 'int': 'in branches'}
     metric0 = ['avg', 'max']#, 'sys', 'dia'
 
@@ -154,6 +158,8 @@ def plot_scatter(db, res, mode):
                 plt.grid(b=True, which='minor', color='0.5', linestyle='-', linewidth=0.5)
                 ax1.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1, decimals=0))
                 ax1.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1, decimals=0))
+                ax1.set_xlim(0.006, 0.3)
+                ax1.set_ylim(0.003, 0.3)
 
                 fname = 'error_correlation_' + fx + '_' + fy + '_' + d + '_' + m0 + '_' + mode + '.png'
                 fpath = os.path.join(db.get_statistics_dir(), fname)
@@ -249,7 +255,8 @@ def print_statistics(db, geometries):
         num_errors[err]['geos'] = [k for k, v in res.items() if v == err]
 
     # remove no bcs
-    del num_errors['3d results do not exist']
+    if '3d results do not exist' in num_errors:
+        del num_errors['3d results do not exist']
 
     for err, geos in num_errors.items():
         print(err)
@@ -322,7 +329,7 @@ def print_statistics(db, geometries):
 
 
 def main(db, geometries, params):
-    print_statistics(db, geometries)
+    # print_statistics(db, geometries)
     print_error(db, geometries)
 
 if __name__ == '__main__':
