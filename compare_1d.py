@@ -14,10 +14,10 @@ from scipy.interpolate import interp1d
 
 from common import rec_dict, get_dict
 from get_database import Database, Post, input_args
-from simulation_io import get_caps_db, collect_results_db_1d_3d, collect_results_db_3d_3d, \
+from simulation_io import get_caps_db, collect_results_db, collect_results_db_3d_3d, \
     collect_results_db_3d_3d_spatial
 
-sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
+sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/')
 
 import sv_1d_simulation as oned
 
@@ -35,13 +35,16 @@ def plot_1d_3d_all(db, opt, geo, res, time):
     # get post-processing constants
     post = Post()
 
+    # get models
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+
     # get 1d/3d map
     caps = get_caps_db(db, geo)
 
-    fig, ax = plt.subplots(len(post.fields), len(post.models), figsize=(20, 10), dpi=opt['dpi'], sharex='col', sharey='row')
+    fig, ax = plt.subplots(len(post.fields), len(models), figsize=(20, 10), dpi=opt['dpi'], sharex='col', sharey='row')
 
     for i, f in enumerate(post.fields):
-        for j, m in enumerate(post.models):
+        for j, m in enumerate(models):
             ax[i, j].grid(True)
 
             if opt['legend_row'] or i == 0:
@@ -94,6 +97,9 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     # get post-processing constants
     post = Post()
 
+    # get models
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+
     # get 1d/3d map
     caps = get_caps_db(db, geo)
     
@@ -101,7 +107,7 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
     names = db.get_cap_names(geo)
 
     # get 0d bcs
-    bc_0d = get_dict(db.get_bc_0D_path(geo))
+    bc_0d = get_dict(db.get_bc_0D_path(geo, '3d_rerun'))
     
     if len(caps) > 50:
         dpi = opt['dpi'] // 4
@@ -111,7 +117,8 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
         sharey = opt['sharey']
 
     fields = post.fields
-    fields.remove('area')
+    if 'area' in fields:
+        fields.remove('area')
 
     fig, ax = plt.subplots(len(fields), len(caps), figsize=(opt['w'], opt['h']), dpi=dpi, sharex=opt['sharex'], sharey=sharey)
 
@@ -129,14 +136,21 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
                 ax[i, j].yaxis.set_tick_params(which='both', labelleft=True)
 
             lg = []
-            for m in post.models:
-                ax[i, j].plot(time[m], res[br][f][m + '_cap'] * post.convert[f], post.styles[m])
+            for m in models:
+                if m == '3d':
+                    i0 = 1
+                else:
+                    i0 = 0
+                ax[i, j].plot(time[m][i0:], res[br][f][m + '_cap_last'][i0:] * post.convert[f], post.styles[m], color=post.color[m])
                 lg += [m.upper()]
 
-            if f == 'pressure' and bc_0d:
-                if br in bc_0d[f]:
-                    ax[i, j].plot(bc_0d['time'], bc_0d[f][br] * post.convert[f], 'k--')
-                    lg += ['0D BC']
+            # if f == 'pressure' and bc_0d:
+            #     if br in bc_0d:
+            #         ax[i, j].plot(bc_0d[br]['t'], bc_0d[br]['p'] * post.convert[f], 'k--')
+            #         lg += ['0D BC']
+            #     pres = res[br][f][m + '_cap']
+            #     delta_p = np.abs(pres[-1] - pres[0]) / (np.max(pres) - np.min(pres))
+            #     print(names[c], '{:.2e}'.format(delta_p))
 
             ax[i, j].legend(lg)
 
@@ -150,13 +164,13 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
     # get post-processing constants
     post = Post()
 
+    # get models
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+
     # get 1d/3d map
     caps = get_caps_db(db, geo)
     cap_br = list(caps.values())
     cap_names = list(caps.keys())
-
-    # get cap names
-    names = db.get_cap_names(geo)
 
     if len(res) > 50:
         dpi = opt['dpi'] // 4
@@ -168,11 +182,13 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
     fig, ax = plt.subplots(len(post.fields), len(res), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=sharey)
 
     # pick reference time step with highest inflow
-    m_ref = '3d'
-    t_max = {m_ref: np.argmax(res[0]['flow'][m_ref + '_cap'])}
+    for m in models:
+        if '3d' in m:
+            m_ref = m
+            t_max = {m_ref: np.argmax(res[0]['flow'][m_ref + '_cap_last'])}
 
     # pick closest time step for other models
-    for m in post.models:
+    for m in models:
         if m != m_ref:
             t_max[m] = np.argmin(np.abs(time[m_ref][t_max[m_ref]] - time[m]))
 
@@ -183,24 +199,26 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
             if opt['legend_row'] or i == 0:
                 if br in cap_br:
                     name = cap_names[cap_br.index(br)]
+                    if not name.isupper():
+                        name = name.capitalize()
                 else:
-                    name = 'branch ' + str(br)
+                    name = 'Branch ' + str(br)
                 ax[i, j].set_title(name)
             if opt['legend_row'] or i == len(post.fields) - 1:
-                ax[i, j].set_xlabel('Vessel path [1]')
+                ax[i, j].set_xlabel('Vessel path [-]')
                 ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
             if opt['legend_col'] or j == 0:
                 ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
                 ax[i, j].yaxis.set_tick_params(which='both', labelleft=True)
 
             lg = []
-            for m in post.models:
+            for m in models:
                 path = res[br][m + '_path']
-                ax[i, j].plot(path / path[-1], res[br][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m])
+                ax[i, j].plot(path / path[-1], res[br][f][m + '_int'][:, t_max[m]] * post.convert[f], post.styles[m], color=post.color[m])
                 lg.append(m)
 
             ax[i, j].legend(lg)
-            ax[i, j].set_xlim(left=0)
+            ax[i, j].set_xlim(0, 1)
 
     add_image(db, geo, fig)
     # fig.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -280,6 +298,9 @@ def plot_1d_3d_paper(db, opt, geo, res, time):
 
 
 def calc_error(db, geo, res, time):
+    # reduced model to compare
+    m_rom = '0d'
+
     # get post-processing constants
     post = Post()
 
@@ -292,23 +313,30 @@ def calc_error(db, geo, res, time):
     # relative difference between two arrays
     rel_diff = lambda a, b: np.abs((a - b) / b)
 
+    # get reference solution
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+    if '3d_rerun' in models:
+        m_ref = '3d_rerun'
+    else:
+        m_ref = '3d'
+
     # get spatial error
     err = rec_dict()
     for f in post.fields:
         for br in res.keys():
             # retrieve 3d results
-            res_3d = res[br][f]['3d_int']
+            res_3d = res[br][f][m_ref + '_int_last']
 
             # map paths to interval [0, 1]
-            path_1d = res[br]['1d_path'] / res[br]['1d_path'][-1]
-            path_3d = res[br]['3d_path'] / res[br]['3d_path'][-1]
+            path_1d = res[br][m_rom + '_path'] / res[br][m_rom + '_path'][-1]
+            path_3d = res[br][m_ref + '_path'] / res[br][m_ref + '_path'][-1]
 
             # interpolate in space and time
-            res_1d = interp(path_1d, res[br][f]['1d_int'], path_3d)
-            res_1d = interp(time['1d'], res_1d, time['3d'])
+            res_1d = interp(path_1d, res[br][f][m_rom + '_int_last'], path_3d)
+            res_1d = interp(time[m_rom], res_1d, time[m_ref])
 
             # calculate spatial error (eliminate time dimension)
-            if f == 'pressure' or f == 'area':
+            if f == 'pressure' or (f == 'area' and m_rom == '1d'):
                 diff = rel_diff(res_1d, res_3d)
                 err[f]['spatial']['avg'][br] = np.mean(diff, axis=1)
                 err[f]['spatial']['max'][br] = np.max(diff, axis=1)
@@ -340,7 +368,10 @@ def calc_error(db, geo, res, time):
             err[f]['int'][m]['all'] = np.mean([err[f]['int'][m][br] for br in res.keys()])
             err[f]['cap'][m]['all'] = np.mean([err[f]['cap'][m][br] for br in caps.values()])
 
-    db.add_1d_3d_comparison(geo, err)
+    if m_rom == '0d':
+        db.add_0d_3d_comparison(geo, err)
+    elif m_rom == '1d':
+        db.add_1d_3d_comparison(geo, err)
 
 
 def main(db, geometries):
@@ -348,17 +379,9 @@ def main(db, geometries):
     post = Post()
 
     for geo in geometries:
-        print('Comparing geometry ' + geo)
-
         # read results
-        if '3d' in post.models and '1d' in post.models:
-            res, time = collect_results_db_1d_3d(db, geo)
-        elif '3d' in post.models and '3d_rerun' in post.models:
-            res, time = collect_results_db_3d_3d(db, geo)
-        else:
-            raise ValueError('Unknown combination of models')
-
-        if res is None:
+        res, time = collect_results_db(db, geo, post.models)
+        if '0d' not in time:
             continue
 
         # plot options
@@ -370,18 +393,17 @@ def main(db, geometries):
                'w': 1 * (len(db.get_surface_names(geo)) * 3 + 4),
                'h': 2 * (len(Post().fields) * 1 + 2)}
 
-        # calculate error
-        if '3d' in post.models and '1d' in post.models:
-            calc_error(db, geo, res, time)
-
         # generate plots
-        print('plotting')
+        print('Plotting geometry ' + geo)
+
+        # calculate error
+        calc_error(db, geo, res, time)
+
         plot_1d_3d_all(db, opt, geo, res, time)
         plot_1d_3d_caps(db, opt, geo, res, time)
         plot_1d_3d_interior(db, opt, geo, res, time)
 
         # plot_1d_3d_paper(db, opt, geo, res, time)
-
         # plot_1d_3d_cyclic(db, opt, geo, res, time)
 
 
