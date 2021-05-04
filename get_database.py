@@ -257,7 +257,12 @@ class Database:
         return geo in loop
 
     def get_png(self, geo):
-        return os.path.join(self.fpath_png, 'OSMSC' + geo + '_sim.png')
+        sim = os.path.join(self.fpath_png, 'OSMSC' + geo + '_sim.png')
+        vol = os.path.join(self.fpath_png, 'OSMSC' + geo + '_vol.png')
+        if os.path.exists(sim):
+            return sim
+        else:
+            return vol
 
     def get_img(self, geo):
         return exists(os.path.join(self.fpath_sim, geo, 'image_data', 'vti', 'OSMSC' + geo[:4] + '-cm.vti'))
@@ -446,11 +451,17 @@ class Database:
     def get_log_file_1d(self):
         return os.path.join(self.fpath_solve, 'log_1d.npy')
 
+    def get_log_file_0d(self):
+        return os.path.join(self.fpath_solve, 'log_0d.npy')
+
     def get_bc_err_file(self, m):
         return os.path.join(self.fpath_gen, 'bc_err_' + m + '.npy')
 
     def add_log_file_1d(self, geo, log):
         self.add_dict(self.get_log_file_1d(), geo, log)
+
+    def add_log_file_0d(self, geo, log):
+        self.add_dict(self.get_log_file_0d(), geo, log)
 
     def add_bc_err(self, geo, m, log):
         self.add_dict(self.get_bc_err_file(m), geo, log)
@@ -460,6 +471,12 @@ class Database:
 
     def add_1d_3d_comparison(self, geo, err):
         self.add_dict(self.get_1d_3d_comparison(), geo, err)
+
+    def get_0d_3d_comparison(self):
+        return os.path.join(os.path.dirname(self.get_post_path('', '')), '0d_3d_comparison.npy')
+
+    def add_0d_3d_comparison(self, geo, err):
+        self.add_dict(self.get_0d_3d_comparison(), geo, err)
 
     def get_3d_3d_comparison(self):
         return os.path.join(self.gen_file('3d_3d_comparison', '', ''), '3d_3d_comparison.npy')
@@ -740,7 +757,7 @@ class SimVascular:
         self.svpre = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpre'
         self.svsolver = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svsolver'
         self.svpost = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpost'
-        self.onedsolver = '/home/pfaller/work/repos/svOneDSolver/build_skyline/bin/OneDSolver'
+        self.onedsolver = '/home/pfaller/work/repos/svOneDSolver_fork/build_skyline/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular_fork/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
         # self.sv_debug = '/home/pfaller/work/repos/SimVascular/build_debug/SimVascular-build/sv'
@@ -801,19 +818,23 @@ class SVProject:
 
 class Post:
     def __init__(self):
-        self.fields = ['pressure', 'flow', 'area']
+        # self.fields = ['pressure', 'flow', 'area']
+        self.fields = ['pressure', 'flow']
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
-        self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-', '0d': ':'}
-        self.colors = {'3d': 'C0', '3d_rerun': 'C1', '3d_rerun_bc': 'C1', '1d': 'C1', 'r': 'C2'}
+        self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-', '0d': '-'}
+        self.color = {'3d': 'k', '3d_rerun': 'tab:blue', '3d_rerun_bc': 'C1', '1d': 'tab:orange', '0d': 'r'}
 
         self.cgs2mmhg = 7.50062e-4
         self.mlps2lph = 60 / 1000
         self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
 
         # sets the plot order
-        # self.models = ['3d', '1d']
-        # self.models = ['3d_rerun', '1d']
-        self.models = ['3d', '3d_rerun']
+        # self.models = ['3d', '1d', '0d']
+        # self.models = ['3d_rerun', '0d']
+        # self.models = ['3d', '0d']
+        # self.models = ['1d', '0d']
+        self.models = ['3d_rerun', '3d', '0d']
+        # self.models = ['3d', '3d_rerun']
         # self.models = ['3d', '3d_rerun_bc']
 
         self.colors = {'Cerebrovascular': 'k',

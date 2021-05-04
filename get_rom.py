@@ -16,8 +16,10 @@ from simulation_io import read_results_1d, get_caps_db
 from common import coronary_sv_to_oned
 
 sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/')
+sys.path.append('/home/pfaller/work/repos/svZeroDSolver_fork')
 
-import sv_1d_simulation as oned
+import sv_rom_simulation as oned
+import run_0d_solver_fast as run0d
 
 
 def get_params(db, geo):
@@ -26,7 +28,7 @@ def get_params(db, geo):
 
     # simvascular project
     project = Project(db, geo, '')
-    
+
     params['fpath_1d'] = db.get_solve_dir_1d(geo)
     fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
 
@@ -80,10 +82,10 @@ def get_params(db, geo):
     params['outlets'] = list(caps.keys())
 
     # number of cycles to run
-    params['n_cycle'] = 50
+    params['n_cycle'] = project.estimate_n_cycle(n_default=50)
 
     # sub-segment size
-    params['seg_min_num'] = 1
+    params['seg_min_num'] = 10
     params['seg_size'] = 999
 
     # FEM size
@@ -97,8 +99,14 @@ def get_params(db, geo):
     params['save_data_freq'] = 1
     params['dt'] = 1.0e-3
 
+    # number of time steps per cycle
+    params['num_dts_cycle'] = int(time[-1] / params['dt'])
+
     # run all cycles
     params['num_dts'] = int(time[-1] * params['n_cycle'] / params['dt'] + 1.0)
+
+    # model order (0 or 1)
+    params['model_order'] = 0
 
     return params
 
@@ -110,13 +118,15 @@ def generate_1d_api(db, geo):
     params_db = get_params(db, geo)
 
     # create 1d simulation
-    oned_simulation = sv.simulation.OneDimensional()
+    rom_simulation = sv.simulation.ROM()
 
     # Create 1D simulation parameters
-    params = sv.simulation.OneDimensionalParameters()
+    params = sv.simulation.ROMParameters()
 
     # Mesh parameters
     mesh_params = params.MeshParameters()
+    mesh_params.seg_size_adaptive = params_db['seg_size_adaptive']
+    mesh_params.seg_min_num = params_db['seg_min_num']
 
     # Model parameters
     model_params = params.ModelParameters()
@@ -157,9 +167,14 @@ def generate_1d_api(db, geo):
     solution_params.save_frequency = params_db['save_data_freq']
 
     # Write a 1D solver input file
-    oned_simulation.write_input_file(model=model_params, mesh=mesh_params, fluid=fluid_props,
-                                     material=material, boundary_conditions=bcs, solution=solution_params,
-                                     directory=params_db['fpath_1d'])
+    rom_simulation.write_input_file(model=model_params,
+                                    model_order=model_order,
+                                    mesh=mesh_params,
+                                    fluid=fluid_props,
+                                    material=material,
+                                    boundary_conditions=bcs,
+                                    solution=solution_params,
+                                    directory=params_db['fpath_1d'])
     return None
 
 
@@ -187,7 +202,8 @@ def generate_1d(db, geo):
 
     # try:
     if True:
-        oned.run(boundary_surfaces_directory=fpath_surf,
+        oned.run(model_order=params['model_order'],
+                 boundary_surfaces_directory=fpath_surf,
                  centerlines_input_file=params['centerlines_input_file'],
                  centerlines_output_file=None,
                  compute_centerlines=False,
@@ -215,7 +231,7 @@ def generate_1d(db, geo):
                  seg_min_num=params['seg_min_num'],
                  seg_size=params['seg_size'],
                  seg_size_adaptive=params['seg_size_adaptive'],
-                 solver_output_file=geo + '.inp',
+                 solver_output_file='solver.in',
                  save_data_frequency=params['save_data_freq'],
                  surface_model=os.path.join(fpath_geo, 'all_exterior.vtp'),
                  time_step=params['dt'],
@@ -232,6 +248,8 @@ def generate_1d(db, geo):
     return None
 
 
+# from profilehooks import profile
+# @profile
 def main(db, geometries):
     # simvascular object
     sv = SimVascular()
@@ -244,40 +262,55 @@ def main(db, geometries):
         #     continue
 
         # generate oneDSolver input file and check if successful
-        msg = generate_1d(db, geo)
-        # msg = generate_1d_api(db, geo)
+        try:
+            msg = generate_1d_api(db, geo)
+        except:
+            msg = 'error'
 
         # msg = None
         # if False:
         if not msg:
-            # run oneDSolver
-            # sv.run_solver_1d(db.get_solve_dir_1d(geo), geo + '.inp')
-            sv.run_solver_1d(db.get_solve_dir_1d(geo), 'solver.in')
-            # with open(os.path.join(db.get_solve_dir_1d(geo), 'solver.log'), 'w+') as f:
-            #     f.write(out_solve)
+            if model_order == 1:
+                # run oneDSolver
+                sv.run_solver_1d(db.get_solve_dir_1d(geo), 'solver.in')
 
-            # extract results
-            res_dir = db.get_solve_dir_1d(geo)
-            params_file = db.get_1d_params(geo)
-            results_1d = read_results_1d(res_dir, params_file)
+                # extract results
+                res_dir = db.get_solve_dir_1d(geo)
+                params_file = db.get_1d_params(geo)
+                results_1d = read_results_1d(res_dir, params_file)
 
-            # save results
-            if results_1d['flow']:
-                # save results in dict
-                np.save(db.get_1d_flow_path(geo), results_1d)
+                # save results
+                if results_1d['flow']:
+                    # save results in dict
+                    np.save(db.get_1d_flow_path(geo), results_1d)
 
-                # remove 1d output files
-                for f in glob.glob(os.path.join(res_dir, geo + 'branch*seg*_*.dat')):
-                    os.remove(f)
+                    # remove 1d output files
+                    for f in glob.glob(os.path.join(res_dir, geo + 'branch*seg*_*.dat')):
+                        os.remove(f)
 
-                msg = 'success'
-            else:
-                msg = 'unconverged'
+                    msg = 'success'
+                else:
+                    msg = 'unconverged'
+            elif model_order == 0:
+                # get parameters
+                params = get_params(db, geo)
+
+                # parameters for 0d simulation
+                zero_d_solver_input_file_path = os.path.join(db.get_solve_dir_1d(geo), 'solver.in')
+
+                # run 0d simulation
+                run0d.set_up_and_run_0d_simulation(zero_d_solver_input_file_path)
+
+                # move output file
+                src = os.path.join(db.get_solve_dir_1d(geo), 'solver_all_results.npy')
+                dst = db.get_0d_flow_path(geo)
+                shutil.move(src, dst)
         else:
             print('  skipping (1d model creation failed)\n  ' + msg)
 
         # store errors in file
-        db.add_log_file_1d(geo, msg)
+        if model_order == 1:
+            db.add_log_file_1d(geo, msg)
 
 
 if __name__ == '__main__':
