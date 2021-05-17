@@ -479,7 +479,7 @@ class Database:
         self.add_dict(self.get_0d_3d_comparison(), geo, err)
 
     def get_3d_3d_comparison(self):
-        return os.path.join(self.gen_file('3d_3d_comparison', '', ''), '3d_3d_comparison.npy')
+        return os.path.join(os.path.dirname(self.get_post_path('', '')), '3d_3d_comparison.npy')
 
     def get_convergence_path(self):
         return os.path.join(self.gen_file('statistics', '', ''), 'convergence.npy')
@@ -683,9 +683,6 @@ class Database:
         return int(float(bc_def['params']['sim_steps_per_cycle']))
 
     def get_3d_timestep(self, geo):
-        # get model parameters
-        bc_def = self.get_bcs(geo)
-
         # read inflow conditions
         time, inflow = self.get_inflow(geo)
 
@@ -713,11 +710,15 @@ class Database:
         # find increment in time steps
         nt_out = np.unique(np.diff(np.rint(time_export).astype(int)))
 
+        # number of time steps has been modified because original export time is not equally spaced
+        if len(nt_out) > 1:
+            time_export = np.linspace(0, time[-1], len(time)) / dt
+            nt_out = np.unique(np.diff(np.rint(time_export).astype(int)))
+
         # check if increment can be represented by a uniform series of integers
-        if len(nt_out) == 1:
-            return nt_out[0]
-        else:
-            return 1
+        assert len(nt_out) == 1, 'output not equally spaced'
+
+        return nt_out[0]
 
     def get_time_constants(self, geo):
         params = self.get_bcs(geo)
@@ -818,8 +819,8 @@ class SVProject:
 
 class Post:
     def __init__(self):
-        # self.fields = ['pressure', 'flow', 'area']
-        self.fields = ['pressure', 'flow']
+        self.fields = ['pressure', 'flow', 'area']
+        # self.fields = ['pressure', 'flow']
         self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
         self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-', '0d': '-'}
         self.color = {'3d': 'k', '3d_rerun': 'tab:blue', '3d_rerun_bc': 'C1', '1d': 'tab:orange', '0d': 'r'}
@@ -833,7 +834,7 @@ class Post:
         # self.models = ['3d_rerun', '0d']
         # self.models = ['3d', '0d']
         # self.models = ['1d', '0d']
-        self.models = ['3d_rerun', '3d', '0d']
+        self.models = ['3d_rerun', '3d', '1d', '0d']
         # self.models = ['3d', '3d_rerun']
         # self.models = ['3d', '3d_rerun_bc']
 
