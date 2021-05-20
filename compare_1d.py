@@ -6,6 +6,9 @@ import os
 import argparse
 import pdb
 
+import matplotlib
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from matplotlib.offsetbox import TextArea, DrawingArea, OffsetImage, AnnotationBbox
@@ -19,7 +22,7 @@ from simulation_io import get_caps_db, collect_results_db, collect_results_db_3d
 
 sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/')
 
-import sv_1d_simulation as oned
+import sv_rom_simulation as oned
 
 
 def add_image(db, geo, fig):
@@ -37,6 +40,8 @@ def plot_1d_3d_all(db, opt, geo, res, time):
 
     # get models
     models = [k[:-4] for k in time.keys() if '_all' in k]
+    if '3d' in models and '3d_rerun' in models and opt['exclude_old']:
+        models.remove('3d')
 
     # get 1d/3d map
     caps = get_caps_db(db, geo)
@@ -99,6 +104,8 @@ def plot_1d_3d_caps(db, opt, geo, res, time):
 
     # get models
     models = [k[:-4] for k in time.keys() if '_all' in k]
+    if '3d' in models and '3d_rerun' in models and opt['exclude_old']:
+        models.remove('3d')
 
     # get 1d/3d map
     caps = get_caps_db(db, geo)
@@ -166,6 +173,8 @@ def plot_1d_3d_interior(db, opt, geo, res, time):
 
     # get models
     models = [k[:-4] for k in time.keys() if '_all' in k]
+    if '3d' in models and '3d_rerun' in models and opt['exclude_old']:
+        models.remove('3d')
 
     # get 1d/3d map
     caps = get_caps_db(db, geo)
@@ -299,79 +308,88 @@ def plot_1d_3d_paper(db, opt, geo, res, time):
 
 def calc_error(db, geo, res, time):
     # reduced model to compare
-    m_rom = '0d'
+    roms = ['0d', '1d', '3d']
+    for m_rom in roms:
+        if m_rom not in time:
+            continue
+        if m_rom == '3d' and '3d_rerun' not in time:
+            continue
 
-    # get post-processing constants
-    post = Post()
+        # get post-processing constants
+        post = Post()
 
-    # get 1d/3d map
-    caps = get_caps_db(db, geo)
+        # get 1d/3d map
+        caps = get_caps_db(db, geo)
 
-    # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
-    interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
+        # interpolate 1d to 3d in space and time (allow extrapolation due to round-off errors at bounds)
+        interp = lambda x_1d, y_1d, x_3d: interp1d(x_1d, y_1d.T, fill_value='extrapolate')(x_3d)
 
-    # relative difference between two arrays
-    rel_diff = lambda a, b: np.abs((a - b) / b)
+        # relative difference between two arrays
+        rel_diff = lambda a, b: np.abs((a - b) / b)
 
-    # get reference solution
-    models = [k[:-4] for k in time.keys() if '_all' in k]
-    if '3d_rerun' in models:
-        m_ref = '3d_rerun'
-    else:
-        m_ref = '3d'
+        # get reference solution
+        models = [k[:-4] for k in time.keys() if '_all' in k]
+        if '3d_rerun' in models:
+            m_ref = '3d_rerun'
+        else:
+            m_ref = '3d'
 
-    # get spatial error
-    err = rec_dict()
-    for f in post.fields:
-        for br in res.keys():
-            # retrieve 3d results
-            res_3d = res[br][f][m_ref + '_int_last']
-
-            # map paths to interval [0, 1]
-            path_1d = res[br][m_rom + '_path'] / res[br][m_rom + '_path'][-1]
-            path_3d = res[br][m_ref + '_path'] / res[br][m_ref + '_path'][-1]
-
-            # interpolate in space and time
-            res_1d = interp(path_1d, res[br][f][m_rom + '_int_last'], path_3d)
-            res_1d = interp(time[m_rom], res_1d, time[m_ref])
-
-            # calculate spatial error (eliminate time dimension)
-            if f == 'pressure' or (f == 'area' and m_rom == '1d'):
-                diff = rel_diff(res_1d, res_3d)
-                err[f]['spatial']['avg'][br] = np.mean(diff, axis=1)
-                err[f]['spatial']['max'][br] = np.max(diff, axis=1)
-            elif f == 'flow':
-                diff = np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1))
-                err[f]['spatial']['avg'][br] = np.mean(diff, axis=0)
-                err[f]['spatial']['max'][br] = np.max(diff, axis=0)
-
-            err[f]['spatial']['sys'][br] = np.abs(rel_diff(np.max(res_1d, axis=1), np.max(res_3d, axis=1)))
-            err[f]['spatial']['dia'][br] = np.abs(rel_diff(np.min(res_1d, axis=1), np.min(res_3d, axis=1)))
-
-    for f in post.fields:
-        for m in err[f]['spatial'].keys():
-            # get interior error
+        # get spatial error
+        err = rec_dict()
+        for f in post.fields:
+            if f == 'area' and m_rom == '0d':
+                continue
             for br in res.keys():
-                err[f]['int'][m][br] = np.mean(err[f]['spatial'][m][br])
+                # retrieve 3d results
+                res_3d = res[br][f][m_ref + '_int_last']
 
-            # get cap error
-            for br in caps.values():
-                if br == 0:
-                    # inlet
-                    i_cap = 0
-                else:
-                    # outlet
-                    i_cap = -1
-                err[f]['cap'][m][br] = err[f]['spatial'][m][br][i_cap]
+                # map paths to interval [0, 1]
+                path_1d = res[br][m_rom + '_path'] / res[br][m_rom + '_path'][-1]
+                path_3d = res[br][m_ref + '_path'] / res[br][m_ref + '_path'][-1]
 
-            # get error over all branches
-            err[f]['int'][m]['all'] = np.mean([err[f]['int'][m][br] for br in res.keys()])
-            err[f]['cap'][m]['all'] = np.mean([err[f]['cap'][m][br] for br in caps.values()])
+                # interpolate in space and time
+                res_1d = interp(path_1d, res[br][f][m_rom + '_int_last'], path_3d)
+                res_1d = interp(time[m_rom], res_1d, time[m_ref])
 
-    if m_rom == '0d':
-        db.add_0d_3d_comparison(geo, err)
-    elif m_rom == '1d':
-        db.add_1d_3d_comparison(geo, err)
+                # calculate spatial error (eliminate time dimension)
+                if f == 'pressure' or (f == 'area' and m_rom == '1d'):
+                    diff = rel_diff(res_1d, res_3d)
+                    err[f]['spatial']['avg'][br] = np.mean(diff, axis=1)
+                    err[f]['spatial']['max'][br] = np.max(diff, axis=1)
+                elif f == 'flow':
+                    diff = np.abs((res_1d - res_3d).T / np.max(res_3d, axis=1))
+                    err[f]['spatial']['avg'][br] = np.mean(diff, axis=0)
+                    err[f]['spatial']['max'][br] = np.max(diff, axis=0)
+
+                err[f]['spatial']['sys'][br] = np.abs(rel_diff(np.max(res_1d, axis=1), np.max(res_3d, axis=1)))
+                err[f]['spatial']['dia'][br] = np.abs(rel_diff(np.min(res_1d, axis=1), np.min(res_3d, axis=1)))
+
+        for f in post.fields:
+            for m in err[f]['spatial'].keys():
+                # get interior error
+                for br in res.keys():
+                    err[f]['int'][m][br] = np.mean(err[f]['spatial'][m][br])
+
+                # get cap error
+                for br in caps.values():
+                    if br == 0:
+                        # inlet
+                        i_cap = 0
+                    else:
+                        # outlet
+                        i_cap = -1
+                    err[f]['cap'][m][br] = err[f]['spatial'][m][br][i_cap]
+
+                # get error over all branches
+                err[f]['int'][m]['all'] = np.mean([err[f]['int'][m][br] for br in res.keys()])
+                err[f]['cap'][m]['all'] = np.mean([err[f]['cap'][m][br] for br in caps.values()])
+
+        if m_rom == '0d':
+            db.add_0d_3d_comparison(geo, err)
+        elif m_rom == '1d':
+            db.add_1d_3d_comparison(geo, err)
+        elif m_rom == '3d':
+            db.add_3d_3d_comparison(geo, err)
 
 
 def main(db, geometries):
@@ -379,10 +397,15 @@ def main(db, geometries):
     post = Post()
 
     for geo in geometries:
+        # generate plots
+        print(geo)
+
         # read results
         res, time = collect_results_db(db, geo, post.models)
         if '0d' not in time:
+            print('  skipping')
             continue
+        print('  plotting')
 
         # plot options
         opt = {'legend_col': False,
@@ -391,10 +414,8 @@ def main(db, geometries):
                'sharey': 'row',
                'dpi': 200,
                'w': 1 * (len(db.get_surface_names(geo)) * 3 + 4),
-               'h': 2 * (len(Post().fields) * 1 + 2)}
-
-        # generate plots
-        print('Plotting geometry ' + geo)
+               'h': 2 * (len(Post().fields) * 1 + 2),
+               'exclude_old': False}
 
         # calculate error
         calc_error(db, geo, res, time)
