@@ -7,6 +7,8 @@ import vtk
 import shutil
 
 from collections import defaultdict
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 from vtk.util.numpy_support import numpy_to_vtk as n2v
@@ -14,10 +16,199 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 from lift_laplace import StiffnessMatrix
 from get_database import Database, SimVascular, Post, input_args
 from vtk_functions import read_geo, write_geo, ClosestPoints, cell_connectivity, region_grow, collect_arrays
-from simulation_io import map_1d_to_centerline
+from simulation_io import map_1d_to_centerline, collect_results, get_caps_db
+from compare_1d import plot_1d_3d_interior as plt1d3d
 
 
-def project_1d_3d(f_1d, f_vol, f_out, field):
+def plot_projection(db, geometries):
+    for geo in geometries:
+        # plot options
+        opt = {'legend_col': False,
+               'legend_row': False,
+               'sharex': True,
+               'sharey': 'row',
+               'dpi': 200,
+               'w': 15,
+               'h': 6}
+
+        res = defaultdict(lambda: defaultdict(dict))
+        time = {}
+
+        time_inflow, _ = db.get_inflow_smooth(geo)
+
+        f_asym = '/home/pfaller/work/osmsc/data_generated/asymptotic/' + geo + '.vtp'
+        f_proj = '/home/pfaller/work/osmsc/data_generated/initial_pressure/' + geo + '.vtp'
+        # f_res_1d = db.get_1d_flow_path(geo)
+        f_res_1d = '/home/pfaller/work/osmsc/studies/1spb_length/1d_flow_last/' + geo + '.npy'
+        f_rerun = '/home/pfaller/work/osmsc/studies/ini_1d_quad/3d_flow/' + geo + '.vtp'
+        f_oned = db.get_1d_geo(geo)
+
+        # collect_results('3d_rerun', res, time, f_asym, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+        collect_results('3d_rerun', res, time, f_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+        collect_results('3d', res, time, f_proj, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+        collect_results('1d', res, time, f_res_1d, f_oned, t_in=time_inflow[-1])
+
+        plot_1d_3d_interior(db, opt, geo, res, time)
+
+        # new plot
+        res0 = defaultdict(lambda: defaultdict(dict))
+        time0 = {}
+
+        time_inflow, _ = db.get_inflow_smooth(geo)
+        f_rerun = '/home/pfaller/work/osmsc/studies/ini_1d_quad/3d_flow/' + geo + '_first100.vtp'
+        collect_results('3d_rerun', res0, time0, f_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+
+        res1 = defaultdict(lambda: defaultdict(dict))
+        time1 = {}
+
+        time_inflow, _ = db.get_inflow_smooth(geo)
+        f_rerun = '/home/pfaller/work/osmsc/studies/ini_zero/3d_flow/' + geo + '_first1000.vtp'
+        collect_results('3d_rerun', res1, time1, f_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+
+        res2 = defaultdict(lambda: defaultdict(dict))
+        time2 = {}
+
+        time_inflow, _ = db.get_inflow_smooth(geo)
+        f_rerun = '/home/pfaller/work/osmsc/studies/ini_steady/3d_flow/' + geo + '_first100.vtp'
+        collect_results('3d_rerun', res2, time2, f_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+
+        plot_1d_3d_interior_time(db, opt, geo, res0, time0, res1, res2)
+
+def plot_1d_3d_interior(db, opt, geo, res, time):
+    # get post-processing constants
+    post = Post()
+
+    # get models
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+
+    # get 1d/3d map
+    caps = get_caps_db(db, geo)
+    cap_br = list(caps.values())
+    cap_names = list(caps.keys())
+
+    names = db.get_cap_names(geo)
+    names['RCCA'] = 'Right common carotid'
+
+    if len(res) > 50:
+        dpi = opt['dpi'] // 4
+        sharey = False
+    else:
+        dpi = opt['dpi']
+        sharey = opt['sharey']
+
+    fig, ax = plt.subplots(len(post.fields), len(res), figsize=(opt['w'], opt['h']), dpi=dpi, sharex='col', sharey=sharey)
+
+    for i, f in enumerate(['pressure', 'flow']):
+        for j, br in enumerate(res.keys()):
+            ax[i, j].grid(True)
+
+            if opt['legend_row'] or i == 0:
+                if br in cap_br:
+                    name = names[cap_names[cap_br.index(br)]]
+                    # if not name.isupper():
+                    #     name = name.capitalize()
+                else:
+                    name = 'branch ' + str(br)
+                ax[i, j].set_title(name)
+            if opt['legend_row'] or i == len(post.fields) - 1:
+                ax[i, j].set_xlabel('Vessel path [-]')
+                ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
+            if opt['legend_col'] or j == 0:
+                ax[i, j].set_ylabel(f.capitalize() + ' [' + post.units[f] + ']')
+                ax[i, j].yaxis.set_tick_params(which='both', labelleft=True)
+
+            lg = []
+            for m in models:
+                path = res[br][m + '_path']
+                # if f == 'flow' and m == '1d':
+                #     pdb.set_trace()
+                if m == '3d_rerun':
+                    ax[i, j].plot(path / path[-1], res[br][f][m + '_int_last'][:, -1] * post.convert[f], post.styles[m])
+                else:
+                    ax[i, j].plot(path / path[-1], res[br][f][m + '_int'][:, -1] * post.convert[f], post.styles[m])
+                lg.append(m)
+
+            # ax[i, j].legend(lg)
+            ax[i, j].set_xlim(0, 1)
+            ax[i, j].set_xticks([0, 1])
+            if f == 'flow':
+                ax[i, j].set_ylim(0, 2.5)
+
+    # add_image(db, geo, fig)
+    # fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.savefig(db.get_post_path(geo, 'interior'), bbox_inches='tight')
+    plt.close(fig)
+
+def plot_1d_3d_interior_time(db, opt, geo, res, time, res1, res2):
+    # get post-processing constants
+    post = Post()
+
+    # get models
+    models = [k[:-4] for k in time.keys() if '_all' in k]
+
+    # get 1d/3d map
+    caps = get_caps_db(db, geo)
+    cap_br = list(caps.values())
+    cap_names = list(caps.keys())
+
+    names = db.get_cap_names(geo)
+    names['RCCA'] = 'Right common carotid'
+
+    if len(res) > 50:
+        dpi = opt['dpi'] // 4
+        sharey = False
+    else:
+        dpi = opt['dpi']
+        sharey = opt['sharey']
+
+    fig, ax = plt.subplots(1, len(res), figsize=(15, 3), dpi=dpi, sharey=sharey)
+
+    f = 'flow'
+    m = '3d_rerun'
+    n_max = 100
+    dt = db.get_3d_timestep(geo)
+    for j, br in enumerate(res.keys()):
+        ax[j].grid(True)
+        if br in cap_br:
+            name = names[cap_names[cap_br.index(br)]]
+            # if not name.isupper():
+            #     name = name.capitalize()
+        else:
+            name = 'branch ' + str(br)
+        ax[j].set_title(name)
+        ax[j].set_xlabel('Time [s]')
+        ax[j].xaxis.set_tick_params(which='both', labelbottom=True)
+        # ax[j].xaxis.set_ticks(np.linspace(0, n_max * dt, 4))
+        ax[j].xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+        if opt['legend_col'] or j == 0:
+            ax[j].set_ylabel('Max. flow deviation from mean flow [-]')
+            ax[j].yaxis.set_tick_params(which='both', labelleft=True)
+
+        path = res[br][m + '_path']
+        results = [res1, res]#, res2
+        colors = ['k', plt.get_cmap("tab10")(1)]#, 'r'
+        for col, res_sol in zip(colors, results):
+            diff = []
+            for n in range(n_max):
+                sol = res_sol[br][f][m + '_int'][:, n]
+
+                # exclude caps
+                if br == 0:
+                    sol = sol[1:]
+                else:
+                    sol = sol[:-1]
+
+                # relative difference
+                diff += [np.max(np.abs(sol / np.mean(sol) - 1))]
+                # ax[j].plot(path[1:] / path[-1], sol, post.styles[m])
+            ax[j].semilogy(np.arange(n_max) * dt, diff, post.styles[m], color=col)
+        ax[j].set_xlim([-0.001, n_max * dt])
+        # ax[j].set_ylim([1e-5, 1e-1])
+    fig.savefig(db.get_post_path(geo, 'interior_time'), bbox_inches='tight')
+    plt.close(fig)
+
+
+def project_1d_3d_lift(f_1d, f_vol, f_out, field):
     # read volume mesh
     vol = read_geo(f_vol).GetOutput()
     points_vol = v2n(vol.GetPoints().GetData())
@@ -151,7 +342,7 @@ def project_1d_3d_grow(f_1d, f_vol, f_wall, f_out):
                 # add to volume mesh
                 if n == 'velocity':
                     aname = a
-                elif n == flow:
+                elif n == 'flow':
                     aname = 'velocity'
                 add_array(vol, aname, velocity)
 
@@ -180,20 +371,25 @@ def get_error(f_3d, f_1d, f_out):
 
 def main(db, geometries):
     for geo in geometries:
+        print(geo)
         f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
         f_0d = db.get_0d_flow_path_vtp(geo)
         f_1d = db.get_1d_flow_path_vtp(geo)
         f_wall = db.get_surfaces(geo, 'wall')
         f_out = db.get_initial_conditions_pressure(geo) #'test.vtu'#
 
+        if os.path.exists(f_out):
+            print('  projection exists, skipping')
+            continue
+
         if os.path.exists(f_1d):
-            print(geo + ' using 1d')
+            print('  using 1d')
             f_red = f_1d
         elif os.path.exists(f_0d):
-            print(geo + ' using 0d')
+            print('  using 0d')
             f_red = f_0d
         else:
-            print(geo + ' no 0d/1d solution found')
+            print('  no 0d/1d solution found')
             continue
 
         # if os.path.exists(f_out):
@@ -226,5 +422,11 @@ def convert_time(db, geometries):
 if __name__ == '__main__':
     descr = 'Get 3D-3D statistics'
     d, g, _ = input_args(descr)
-    # main(d, g)
-    convert_time(d, g)
+    main(d, g)
+    # convert_time(d, g)
+    # plot_projection(d, g)
+    # f_vol = '/home/pfaller/downloads/0069_0001_post-interv (1)/0069_0001_post-interv/Meshes/0069_0001.vtu'
+    # f_1d = d.get_1d_flow_path_vtp('0069_0001')
+    # f_wall = '/home/pfaller/downloads/0069_0001_post-interv (1)/0069_0001_post-interv/Meshes/wall.vtp'
+    # f_out = '/home/pfaller/0069_0001_interv_ic.vtu'
+    # project_1d_3d_grow(f_1d, f_vol, f_wall, f_out)
