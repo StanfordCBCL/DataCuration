@@ -12,6 +12,7 @@ import scipy.interpolate
 
 from get_database import input_args, Database, SVProject, SimVascular, Post
 from common import coronary_sv_to_oned, get_dict
+from get_sv_meshes import get_meshes
 
 
 class Project:
@@ -25,6 +26,7 @@ class Project:
         print('Estimated cycles: ' + str(self.opt['n_cycle']))
         self.check_files()
         self.make_folders()
+        self.write_inflow('1d')
         self.write_inflow('3d')
         self.copy_files()
         self.write_svproj_file()
@@ -63,6 +65,8 @@ class Project:
             n_cycle = 5
         elif self.mode == 'steady':
             n_cycle = 1
+            numstep = 100
+            nt_out = 1
             inflow = np.mean(inflow) * np.ones(len(time))
         elif self.mode == 'steady0':
             n_cycle = 1
@@ -148,6 +152,7 @@ class Project:
                'quad_interior': '2',
                'residual_control': 'True',
                'residual_criteria': '0.01',
+               'residual_tolerance': '1.0e12',
                'step_construction': '5',
                'time_int_rho': '0.5',
                'time_int_rule': 'Second Order',
@@ -163,13 +168,20 @@ class Project:
                'mesh_walls': os.path.join('mesh-complete', 'walls_combined.vtp')}
         return opt
     
-    def estimate_n_cycle(self, n_tau=3):
+    def estimate_n_cycle(self, n_extra=1, n_default=5):
         # get numerical time constants
         db = Database('1spb_length')
         res_num = get_dict(db.get_convergence_path())
 
+        cat = db.get_bcs(self.geo)['params']['deliverable_category']
+
+        # pure resistance
+        bc_types = np.unique(list(db.get_bcs(self.geo)['bc_type'].values()))
+        if len(bc_types) == 1 and bc_types[0] == 'resistance':
+            return 2
+
         if self.geo not in res_num:
-            return n_tau
+            return n_default
         else:
             # time constant
             tau = np.mean(res_num[self.geo]['tau']['pressure'])
@@ -177,11 +189,16 @@ class Project:
             # tolerance for asymptotic convergence
             tol = 0.01
 
-            # number of cardiac cycles required to reach tolerance (+ extra)
-            n_cycle = int(- np.log(tol) * tau + 0.5) + n_tau
+            # number of cardiac cycles required to reach tolerance (+ extra) from zero ICs
+            n_cycle_zero = int(- np.log(tol) * tau + 0.5) + n_extra
 
-            print('tau [cycles] = ' + str(n_cycle))
-            return n_cycle
+            # estimated number of cycles from steady state ICs
+            n_cycle_mean = int(4 + 2 * (tau + 0.5))
+
+            if cat == 'Coronary':
+                return n_cycle_zero
+            else:
+                return np.min([n_cycle_zero, n_cycle_mean])
     
     def write_svproj_file(self):
         t = str(self.db.svproj.t)
@@ -342,18 +359,17 @@ class Project:
     
         if time is None:
             raise ValueError('no inflow')
-    
-        # reverse flow for svOneDSolver
-        if model == '1d':
-            inflow *= -1
-    
+
         # save inflow file
         fpath = self.db.get_sv_flow_path(self.geo, model)
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
-        np.savetxt(fpath, np.vstack((time, inflow)).T)
-        # np.savetxt(fpath, np.vstack(([0, 1], [inflow[-1], inflow[-1]])).T)
-        # np.savetxt(fpath, np.vstack(([0, 1], [0, 0])).T)
-    
+
+        # reverse flow for svOneDSolver
+        if model == '1d':
+            np.savetxt(fpath, np.vstack((time, - inflow)).T)
+        else:
+            np.savetxt(fpath, np.vstack((time, inflow)).T)
+
         return len(inflow), time[-1]
     
     def write_pre(self, solver='svsolver'):
@@ -497,8 +513,8 @@ class Project:
                     f.write(names[t] + ' Values From File: True\n\n')
                 elif t == 'resistance':
                     f.write('Resistance Values: ')
-                    for cap, bc in bc_def['bc_type'].items():
-                        if bc == 'resistance':
+                    for cap in self.db.get_outlet_names(self.geo):
+                        if bc_def['bc_type'][cap] == 'resistance':
                             f.write(str(bc_def['bc'][cap]['R']) + ' ')
                     f.write('\n\n')
                 else:
@@ -512,6 +528,7 @@ class Project:
             # nonlinear solver
             f.write('Residual Control: ' + opt['residual_control'] + '\n')
             f.write('Residual Criteria: ' + opt['residual_criteria'] + '\n')
+            f.write('Residual Tolerance: ' + opt['residual_tolerance'] + '\n')
             f.write('Minimum Required Iterations: ' + opt['min_iter'] + '\n')
     
             # linear solver
@@ -539,7 +556,7 @@ class Project:
     def write_simulation(self):
         # get boundary conditions
         bc_def = self.opt['bc']
-    
+
         # get outlet names
         outlets = self.db.get_outlet_names(self.geo)
     
@@ -590,6 +607,7 @@ class Project:
                         ['Quadrature Rule on Interior', opt['quad_interior']],
                         ['Residual Control', opt['residual_control']],
                         ['Residual Criteria', opt['residual_criteria']],
+                        ['Residual Tolerance', opt['residual_tolerance']],
                         ['Step Construction', opt['step_construction']],
                         ['Time Integration Rho Infinity', opt['time_int_rho']],
                         ['Time Integration Rule', opt['time_int_rule']],
@@ -865,8 +883,16 @@ def main(db, geometries, params):
             mode = ''
 
         print('Running geometry ' + geo)
-        pj = Project(db, geo, mode)
-        pj.create_sv_project()
+        try:
+            # get meshes
+            get_meshes(db, geo)
+
+            # create sv project
+            pj = Project(db, geo, mode)
+            pj.create_sv_project()
+        except Exception as e:
+            # print(e)
+            continue
 
 
 if __name__ == '__main__':
