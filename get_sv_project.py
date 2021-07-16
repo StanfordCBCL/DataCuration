@@ -356,7 +356,7 @@ class Project:
         opt = self.opt
         time = opt['inflow_data'][:, 0]
         inflow = opt['inflow_data'][:, 1]
-    
+
         if time is None:
             raise ValueError('no inflow')
 
@@ -365,10 +365,11 @@ class Project:
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
 
         # reverse flow for svOneDSolver
+        fmt = '%.10e'
         if model == '1d':
-            np.savetxt(fpath, np.vstack((time, - inflow)).T)
+            np.savetxt(fpath, np.vstack((time, - inflow)).T, fmt=fmt)
         else:
-            np.savetxt(fpath, np.vstack((time, inflow)).T)
+            np.savetxt(fpath, np.vstack((time, inflow)).T, fmt=fmt)
 
         return len(inflow), time[-1]
     
