@@ -202,11 +202,15 @@ class Database:
             geometries = ['0174_0000', '0163_0001', '0160_6001', '0156_0001', '0155_0001', '0151_0001', '0149_0001',
                           '0146_1001', '0141_1001', '0139_1001', '0131_0000', '0129_0000', '0111_0001', '0065_1001',
                           '0064_1001', '0006_0001']
+        elif name == 'fixed_dt':
+            geometries = ['0068_0001', '0092_0001', '0099_0001']
         elif name == 'resistance':
             geometries = []
             for geo in self.get_geometries():
-                name, err = self.get_bc_type(geo)
-                if name == 'resistance':
+                bc_def = self.get_bcs(geo)
+                if bc_def is None:
+                    continue
+                if 'resistance' in bc_def['bc_type'].values():
                     geometries += [geo]
         elif 'units' in name:
             geometries = []
@@ -503,11 +507,11 @@ class Database:
         caps = self.get_surface_names(geo, 'caps')
 
         bc_def = self.get_bcs(geo)
-
         names = {}
-        for c, n in bc_def['spname'].items():
-            if isinstance(n, list):
-                names[c] = ' '.join(n).lower().capitalize()
+        if bc_def is not None:
+            for c, n in bc_def['spname'].items():
+                if isinstance(n, list):
+                    names[c] = ' '.join(n).lower().capitalize()
 
         for c in caps:
             if c not in names:
@@ -639,7 +643,7 @@ class Database:
         return os.path.join(self.get_sv_meshes(geo), geo + '.vtu')
 
     def get_res_3d_vol_rerun(self, geo):
-        return os.path.join(self.fpath_study, 'simulation', geo + '.vtu')
+        return os.path.join(self.fpath_study, '3d_flow', geo + '.vtu')
 
     def get_res_3d_surf_rerun(self, geo):
         return os.path.join(self.fpath_study, 'simulation', geo + '.vtp')
@@ -697,28 +701,16 @@ class Database:
         if time is None:
             return None
 
-        dt = self.get_3d_timestep(geo)
-        nt_out = 10
+        # number of time steps
+        numstep = self.get_3d_numstep(geo)
 
-        # exported time steps
-        time_export = time / dt
-
-        # round to nearest exported time step
-        time_post = np.rint(time_export / nt_out).astype(int) * nt_out
-        err = np.mean(np.abs(time_post - time_export))
-
-        # find increment in time steps
-        nt_out = np.unique(np.diff(np.rint(time_export).astype(int)))
-
-        # number of time steps has been modified because original export time is not equally spaced
-        if len(nt_out) > 1:
-            time_export = np.linspace(0, time[-1], len(time)) / dt
-            nt_out = np.unique(np.diff(np.rint(time_export).astype(int)))
+        # output increment
+        nt_out = numstep / len(time)
 
         # check if increment can be represented by a uniform series of integers
-        assert len(nt_out) == 1, 'output not equally spaced'
+        assert nt_out % 1 == 0.0, 'output not equally spaced'
 
-        return nt_out[0]
+        return int(nt_out)
 
     def get_time_constants(self, geo):
         params = self.get_bcs(geo)
