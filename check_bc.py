@@ -19,8 +19,7 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 from get_database import input_args, Database, Post, SimVascular
 from vtk_functions import read_geo, write_geo
 from get_bc_integrals import integrate_surfaces, integrate_bcs
-from simulation_io import get_caps_db, collect_results, collect_results_db_3d, collect_results_db_1d_3d, get_dict, \
-    collect_results_db_0d
+from simulation_io import get_caps_db, collect_results, collect_results_db, get_dict
 from compare_1d import add_image
 from get_sv_project import coronary_sv_to_oned
 from bc_0d import run_rcr, run_coronary
@@ -28,7 +27,7 @@ from bc_0d import run_rcr, run_coronary
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import matplotlib
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 
 def get_cycle(f, n_cycle):
     return np.hstack((f, np.tile(f[1:], n_cycle - 1)))
@@ -52,7 +51,7 @@ def cont_func(time, value, n_cycle):
     return fun, time_cycle, value_cycle
 
 
-def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
+def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40, check=True):
     # number of cycles from rcr time constant
     if 'Rd' in p:
         t_rcr = p['C'] * p['Rd']
@@ -91,8 +90,9 @@ def run_0d_cycles(flow, time, p, distal_pressure, n_step=100, n_rcr=40):
 
     # check if solution is periodic
     # delta_p = np.abs(np.mean(p_0d[i_last - 1] - p_0d[i_prev - 1]) / np.mean(p_0d[i_last - 1]))
-    delta_p = np.abs(p_out[-1] - p_out[0]) / (np.max(p_out) - np.min(p_out))
-    assert delta_p < 1.0e-9, 'solution not periodic. diff=' + str(delta_p)
+    if check:
+        delta_p = np.abs(p_out[-1] - p_out[0]) / (np.max(p_out) - np.min(p_out))
+        assert delta_p < 1.0e-9, 'solution not periodic. diff=' + str(delta_p)
 
     return t_out, p_out
 
@@ -165,15 +165,11 @@ def check_bc(db, geo):
     # m = '0d'
 
     # get 3d results
-    if m == '0d':
-        res, time = collect_results_db_0d(db, geo)
-    elif m == '3d_rerun':
-        res, time = collect_results_db_3d(db, geo, m)
-    else:
-        return
-    if res is None:
+    res, time = collect_results_db(db, geo, m)
+    if m not in time:
         return
 
+    print('Plotting ' + geo)
     # get 0d results
     if not os.path.exists(db.get_bc_0D_path(geo, m)):
         res_0d = compare_0d(db, geo, res, time, m)
@@ -185,8 +181,6 @@ def check_bc(db, geo):
 
     # if res_0d is None or 'p_1' not in res_0d[list(res_0d.keys())[0]]:
     #     return
-
-    print('Plotting ' + geo)
 
     # get outlets
     caps = get_caps_db(db, geo)
@@ -214,10 +208,13 @@ def check_bc(db, geo):
     fields = ['Flow 3D', 'Pressure 3D']
     # fields = ['Pressure 3D', 'Pressure 0D']
     # fields = ['Pressure 3D', 'Pressure 0D', 'Pressure Q const']
-    fig, ax = plt.subplots(len(fields), len(outlets), figsize=(len(outlets) * 3 + 4, 6), dpi=dpi, sharex=True)#), sharey=True
+    fig, ax = plt.subplots(len(fields), len(outlets), figsize=(len(outlets) * 2 + 2, 4), dpi=dpi, sharex=True, sharey='row')
 
     # get post-processing constants
     post = Post()
+
+    n_max = 21
+    c_max = np.min([time[m + '_n_cycle'], n_max])
 
     errors = []
     for j, (cp, br) in enumerate(outlets.items()):
@@ -227,26 +224,29 @@ def check_bc(db, geo):
             f = field.split()[0].lower()
 
             # plot settings
-            ax[i, j].grid(True)
+            if len(outlets) == 1:
+                pos = i
+            elif len(fields) == 1:
+                pos = j
+            else:
+                pos = (i, j)
+            ax[pos].grid(True)
             if j == 0:
-                ax[i, j].set_ylabel(field + '\n[' + post.units[f] + ']')
-                ax[i, j].yaxis.set_tick_params(which='both', labelleft=True)
+                ax[pos].set_ylabel(field + '\n[' + post.units[f] + ']')
+                ax[pos].yaxis.set_tick_params(which='both', labelleft=True)
             if i == 0:
-                ax[i, j].set_title(names[cp] + ' (' + bc_def['bc_type'][cp].upper() + ')')
+                ax[pos].set_title(names[cp])# + ' (' + bc_def['bc_type'][cp].upper() + ')')
             if i == len(fields) - 1:
-                ax[i, j].set_xlabel('Time [s]')
-                ax[i, j].set_xlim(0, inlet_time[-1])
-                ax[i, j].xaxis.set_tick_params(which='both', labelbottom=True)
+                ax[pos].set_xlabel('Time [s]')
+                ax[pos].set_xlim(0, inlet_time[-1])
+                ax[pos].xaxis.set_tick_params(which='both', labelbottom=True)
 
             # plot bcs
-            for cycle in range(1, time[m + '_n_cycle'] + 1):
+            for cycle in range(1, c_max + 1):
                 ids = field.split()[1].lower()
                 if ids == '3d':
                     x = inlet_time
                     y = res[br][f][m + '_all'][time[m + '_i_cycle_' + str(cycle)]]
-                elif ids == '0d':
-                    x = res_0d[br]['t']
-                    y = res_0d[br]['p_' + str(cycle)]
                 elif ids == 'q':
                     inlet_flow = res[br]['flow'][m + '_all'][time[m + '_i_cycle_' + str(cycle)]]
                     if bc_def['bc_type'][cp] == 'rcr':
@@ -271,22 +271,28 @@ def check_bc(db, geo):
                 else:
                     raise RuntimeError('Unknown selection ' + ids)
 
-                i_c = 1 - (cycle - 1) / (time[m + '_n_cycle'] - 1)
-                ax[i, j].plot(x, y * post.convert[f], color=plt.get_cmap('plasma')(i_c))
+                i_c = 1 - (cycle - 1) / (c_max - 1)
+                ax[pos].plot(x, y * post.convert[f], color=plt.get_cmap('coolwarm_r')(i_c))
+            if field == 'Pressure 3D':
+                x = res_0d[br]['t']
+                y = res_0d[br]['p']
+                ax[pos].plot(x, y * post.convert[f], 'k--')
 
         # calculate error
-        diff = interp1d(res_0d[br]['t'], res_0d[br]['p'], fill_value='extrapolate')(inlet_time) - res[br]['pressure'][m + '_cap']
-        norm = np.max(res[br]['pressure'][m + '_cap']) - np.min(res[br]['pressure'][m + '_cap'])
+        diff = interp1d(res_0d[br]['t'], res_0d[br]['p'], fill_value='extrapolate')(inlet_time) - res[br]['pressure'][m + '_cap_last']
+        norm = np.max(res[br]['pressure'][m + '_cap']) - np.min(res[br]['pressure'][m + '_cap_last'])
         err = np.mean(np.abs(diff)) / norm
         errors += [err]
 
     max_err = np.max(errors) * 100
     max_outlet = db.get_cap_names(geo)[list(outlets.keys())[np.argmax(errors)]]
 
-    print(geo + ' err=' + '{:05.2f}'.format(max_err) + '% at outlet ' + max_outlet)
+    out_str = geo + ' err=' + '{:05.2f}'.format(max_err) + '% at outlet ' + max_outlet + '\n'
+    print(out_str)
+    plt.gcf().suptitle(out_str)
 
     # save figure
-    add_image(db, geo, fig)
+    # add_image(db, geo, fig)
     f_out = db.get_bc_comparison_path(geo, m)
     fig.savefig(f_out, bbox_inches='tight')
     plt.close(fig)
@@ -366,6 +372,32 @@ def plot(db, geometries):
             writer.writerow([g, str(e)])
 
 
+def compare_rcr():
+    params = {'Rp': 100, 'Rd': 1000, 'C': 0.001}
+    distal_pressure = 0
+
+    q_mean = 1
+    nt = 1000
+    nc = 10
+    T = 1
+    time = np.linspace(0, T*nc, nt*nc+1)
+    q_var = lambda x: q_mean + np.cos(x * 2 * np.pi / T)
+    q_const = lambda x: q_mean
+    flows = {'var': q_var, 'const': q_const}
+
+    fig1, ax1 = plt.subplots(dpi=400, figsize=(15, 6))
+
+    out = defaultdict(list)
+    for m, q in flows.items():
+        pressure = run_rcr(q, time, params, distal_pressure)
+        for i in range(nc):
+            out[m] += [np.mean(pressure[np.arange(i * nt, (i + 1) * nt + 1)])]
+        # pdb.set_trace()
+
+        ax1.plot(np.arange(nc), out[m], 'o--')
+    plt.show()
+    pdb.set_trace()
+
 def main(db, geometries):
     for geo in geometries:
         check_bc(db, geo)
@@ -376,3 +408,4 @@ if __name__ == '__main__':
     d, g, _ = input_args(descr)
     main(d, g)
     # plot(d, g)
+    # compare_rcr()

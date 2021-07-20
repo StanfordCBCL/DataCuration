@@ -24,7 +24,7 @@ from vtk_to_xdmf import write_xdmf
 from vtk.util.numpy_support import numpy_to_vtk as n2v
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-sys.path.append('/home/pfaller/work/repos/SimVascular/Python/site-packages/')
+sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/')
 
 
 # import sv_1d_simulation as oned
@@ -113,42 +113,7 @@ def read_results_0d(fpath):
     """
     Read 0d simulation results from dictionary
     """
-    # requested output fields
-    names_0d = {'flow': 'Q',
-                'pressure': 'P',
-                'wss': 'tau'}
-
-    # read results
-    res = get_dict(fpath)
-
-    results_0d = {'time': res['time']}
-    for field in names_0d.keys():
-        results_0d[field] = defaultdict(dict)
-
-        # loop 0d segments
-        for seg in res[field].keys():
-            ids = seg.split('_')
-            assert ids[0] == names_0d[field], 'Tag is ' + ids[0] + ', expected ' + names_0d[field]
-
-            # sort according to branch and branch inlet/outlet
-            if ids[1][0] == 'V':
-                # branch outlet
-                path = 1
-                branch = int(ids[1][1])
-            elif ids[2][0] == 'V':
-                # branch inlet
-                path = 0
-                branch = int(ids[2][1])
-            else:
-                if ids[-1] == 'V0':
-                    # inlet branch inlet
-                    path = 0
-                    branch = 0
-                else:
-                    raise ValueError('Can\'t identify tag ' + seg)
-            results_0d[field][branch][path] = res[field][seg]
-
-    return results_0d
+    return get_dict(fpath)
 
 
 def read_results_1d(res_dir, params_file=None):
@@ -185,7 +150,6 @@ def read_results_1d(res_dir, params_file=None):
             seg = int(re.findall(r'\d+', f_res)[-1])
             branch = int(re.findall(r'\d+', f_res)[-2])
             results_1d[field][branch][seg] = np.array(results_1d_f)
-            pdb.set_trace()
 
     # read simulation parameters and add to result dict
     results_1d['params'] = get_dict(params_file)
@@ -252,7 +216,7 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
     points = v2n(geo_cent.GetPoints().GetData())
 
     # fields to export
-    fields_res_1d = ['flow', 'pressure', 'wss']
+    fields_res_1d = ['flow', 'pressure'] # , 'wss'
     time = res['time']
     n_t = len(time)
 
@@ -296,8 +260,8 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
             res_br_u = res[f][arrays_cent['BranchId'][jc_cent[0] - 1]]
 
             # results at beginning and end of centerline within junction
-            f0 = res_br_u[sorted(res_br_u.keys())[-1]][-1]
-            f1 = res[f][br][0][0]
+            f0 = res_br_u[-1]
+            f1 = res[f][br][0]
 
             # map 1d results to centerline using paths
             array_f[jc_cent] += interp1d([0, 1], np.vstack((f0, f1)).T, fill_value='extrapolate')(jc_path).T
@@ -310,7 +274,7 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
 
         # assemble time steps
         if only_last:
-            arrays[0]['point'][f] = array_f[:, 0]
+            arrays[0]['point'][f] = array_f[:, -1]
         else:
             for i, t in enumerate(time):
                 arrays[str(t)]['point'][f] = array_f[:, i]
@@ -433,7 +397,12 @@ def load_results_3d(f_res_3d):
     res_names = get_res_names(reader, ['pressure', 'velocity'])
 
     # get time steps
-    times = np.unique([float(k.split('_')[1]) for k in res_names])
+    has_time = np.all(['_' in k for k in res_names])
+
+    if has_time:
+        times = np.unique([float(k.split('_')[1]) for k in res_names])
+    else:
+        times = np.zeros(1)
 
     # get branch ids
     branches = np.unique(res['BranchId']).tolist()
@@ -445,7 +414,10 @@ def load_results_3d(f_res_3d):
 
     # initilize output arrays [time step, branch]
     for f in res_names:
-        name = f.split('_')[0]
+        if has_time:
+            name = f.split('_')[0]
+        else:
+            name = f
         out[name] = {}
         for br in branches:
             ids = res['BranchId'] == br
@@ -453,7 +425,10 @@ def load_results_3d(f_res_3d):
 
     # read branch-wise results from geometry
     for f in res_names:
-        name, time = f.split('_')
+        if has_time:
+            name, time = f.split('_')
+        else:
+            name, time = f, 0.0
         for br in branches:
             ids = res['BranchId'] == br
             out[name][br][float(time) == times] = res[f][ids]
@@ -465,7 +440,10 @@ def load_results_3d(f_res_3d):
         out['area'][br] = np.tile(res['area'][ids], (times.shape[0], 1))
 
     # rename velocity to flow
-    out['flow'] = out['velocity']
+    try:
+        out['flow'] = out['velocity']
+    except:
+        pdb.set_trace()
     del out['velocity']
 
     return out
@@ -481,9 +459,13 @@ def get_time(model, res, time, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0):
         dt = 1e-3
         time[model + '_all'] = np.arange(0, res['pressure'][0][0].shape[1] + 1)[1:] * dt
         time[model + '_all'] = np.append(0, time[model + '_all'])
+    elif '0d' in model:
+        time[model + '_all'] = res['time']
+    else:
+        raise RuntimeError('Unknown model ' + model)
 
     # time steps for last cycle
-    if model == '1d' or '3d_rerun' in model:
+    if not model == '3d':
         # how many full cycles where completed?
         n_cycle = max(1, int(time[model + '_all'][-1] // t_in))
         time[model + '_n_cycle'] = n_cycle
@@ -493,8 +475,8 @@ def get_time(model, res, time, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0):
         t_first = t_end * (n_cycle - 1)
         t_last = t_end * n_cycle
 
-        # tolerance (<< time step) to prevent errors due to time step round-off
-        eps = 1.0e-12
+        # tolerance (<< time step * numstep) to prevent errors due to time step round-off
+        eps = 1.0e-3
 
         # select last cycle and shift time to start from zero
         time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first - eps, time[model + '_all'] <= t_last + eps)
@@ -631,10 +613,22 @@ def res_1d_to_path(path, res):
 def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0, caps=None):
     # read results
     # todo: store 1d results in vtp as well
-    if '1d' in model:
-        res_in = get_dict(f_res)
+    if '0d' in model:
+        res_in = read_results_0d(f_res)
         f_geo = centerline
-    elif '3d_rerun_bc' in model:
+        if res_in['time'][0] > 0:
+            print('truncating results')
+            i_start = np.argmin(np.abs(res_in['time'] - t_in))
+
+            # truncate time
+            for f in res_in.keys():
+                if f == 'time':
+                    res_in[f] = res_in[f][i_start:] - res_in[f][i_start]
+                else:
+                    for br in res_in[f].keys():
+                        for n in res_in[f][br].keys():
+                            res_in[f][br][n] = res_in[f][br][n][i_start:]
+    elif '1d' in model:
         res_in = get_dict(f_res)
         f_geo = centerline
     elif '3d' in model:
@@ -662,17 +656,16 @@ def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, nt_3d=0, 
 
         # loop result fields
         for f in ['flow', 'pressure', 'area']:
-            if '1d' in model:
+            if '0d' in model:
+                if f == 'area':
+                    res[br][f]['0d_int'] = np.zeros(res_in['flow'][br].shape)
+                else:
+                    res[br][f]['0d_int'] = res_in[f][br]
+                    res[br]['0d_path'] = res_in['distance'][br]
+            elif '1d' in model:
                 res[br]['1d_path'], res[br][f]['1d_int'] = res_1d_to_path(branch_path, res_in[f][br])
                 if res[br][f]['1d_int'].shape[1] + 1 == time['1d_all'].shape[0]:
                     res[br][f]['1d_int'] = np.hstack((np.zeros((res[br][f]['1d_int'].shape[0], 1)), res[br][f]['1d_int']))
-            elif 'bc' in model:
-                if br not in caps.keys():
-                    continue
-                res_bc = res_in[f][:, caps[br] - 1]
-                if br > 0 and f == 'flow':
-                    res_bc *= -1
-                res[br][f][model + '_cap'] = res_bc
             elif '3d' in model:
                 res[br][model + '_path'] = branch_path
                 res[br][f][model + '_int'] = res_in[f][br].T
@@ -682,29 +675,28 @@ def collect_results(model, res, time, f_res, centerline=None, dt_3d=0, nt_3d=0, 
                 res[br][f][model + '_int'] = np.tile(res[br][f][model + '_int'], (1, 2))[:,
                                              res[br][f][model + '_int'].shape[1] - 1:]
 
-            if 'bc' not in model:
-                if br == 0:
-                    # inlet
-                    i_cap = 0
-                else:
-                    # outlet
-                    i_cap = -1
+            if br == 0:
+                # inlet
+                i_cap = 0
+            else:
+                # outlet
+                i_cap = -1
 
-                # extract cap results
-                res[br][f][model + '_cap'] = res[br][f][model + '_int'][i_cap, :]
+            # extract cap results
+            res[br][f][model + '_cap'] = res[br][f][model + '_int'][i_cap, :]
 
     # get last cycle
     for br in res.keys():
-        if 'bc' in model and br not in caps.keys():
-            continue
         for f in res[br].keys():
             if 'path' not in f:
                 res[br][f][model + '_all'] = res[br][f][model + '_cap']
 
-                if model + '_last_cycle_i' in time:
-                    if 'bc' not in model:
-                        res[br][f][model + '_int'] = res[br][f][model + '_int'][:, time[model + '_last_cycle_i']]
-                    res[br][f][model + '_cap'] = res[br][f][model + '_cap'][time[model + '_last_cycle_i']]
+                if model + '_last_cycle_i' in time and len(time[model + '_last_cycle_i']) > 1:
+                    res[br][f][model + '_int_last'] = res[br][f][model + '_int'][:, time[model + '_last_cycle_i']]
+                    res[br][f][model + '_cap_last'] = res[br][f][model + '_cap'][time[model + '_last_cycle_i']]
+                elif model == '3d':
+                    res[br][f][model + '_int_last'] = res[br][f][model + '_int']
+                    res[br][f][model + '_cap_last'] = res[br][f][model + '_cap']
 
 
 def collect_results_spatial(model, res, time, f_res, dt_3d=0, t_in=0):
@@ -743,33 +735,84 @@ def collect_results_spatial(model, res, time, f_res, dt_3d=0, t_in=0):
     #         res[model][n] = res[model][n][time[model + '_last_cycle_i']]
 
 
-def collect_results_db_1d_3d(db, geo, use_rerun=True):
+def collect_results_db_0d(db, geo):
+    f_res_0d = db.get_0d_flow_path(geo)
+    f_oned = db.get_1d_geo(geo)
+
+    if not os.path.exists(f_res_0d):
+        return None, None
+
+    time_inflow, _ = db.get_inflow_smooth(geo)
+
+    res = defaultdict(lambda: defaultdict(dict))
+    time = {}
+    collect_results('0d', res, time, f_res_0d, centerline=f_oned, t_in=time_inflow[-1])
+
+    return res, time
+
+
+def collect_results_db_3d(db, geo, m):
+    # initialzie results dict
+    res = defaultdict(lambda: defaultdict(dict))
+    time = {}
+
+    if m == '3d':
+        # get paths
+        f_res_3d_osmsc = db.get_3d_flow(geo)
+        if not os.path.exists(f_res_3d_osmsc):
+            return None, None
+
+        # collect osmsc results
+        collect_results('3d', res, time, f_res_3d_osmsc)
+    elif m == '3d_rerun':
+        f_res_3d_rerun = db.get_3d_flow_rerun(geo)
+        if not os.path.exists(f_res_3d_rerun):
+            return None, None
+
+        time_inflow, _ = db.get_inflow_smooth(geo)
+        if time_inflow is None:
+            return None, None
+
+        # collect rerun results
+        collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo),
+                        nt_3d=db.get_3d_increment(geo), ns_3d=db.get_3d_numstep(geo), t_in=time_inflow[-1])
+
+    return res, time
+
+
+def collect_results_db(db, geo, models):
     # initialzie results dict
     res = defaultdict(lambda: defaultdict(dict))
     time = {}
 
     # get paths
+    f_res_0d = db.get_0d_flow_path(geo)
     f_res_1d = db.get_1d_flow_path(geo)
     f_res_3d = db.get_3d_flow(geo)
-    f_res_3d_rerun = '/home/pfaller/work/osmsc/studies/ini_best/3d_flow/' + geo + '.vtp'
+    f_res_3d_rerun_1 = '/home/pfaller/work/osmsc/studies/ini_1d_quad/3d_flow/' + geo + '.vtp'
+    f_res_3d_rerun_0 = '/home/pfaller/work/osmsc/studies/ini_zero/3d_flow/' + geo + '.vtp'
     f_oned = db.get_1d_geo(geo)
-
-    if not os.path.exists(f_res_1d) or not os.path.exists(f_res_3d):
-        return None, None
+    f_cent = db.get_centerline_path(geo)
 
     time_inflow, _ = db.get_inflow_smooth(geo)
 
     # collect results
-    if os.path.exists(f_res_3d_rerun) and use_rerun:
-        collect_results('3d_rerun', res, time, f_res_3d_rerun, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
-    else:
+    if '3d_rerun' in models:
+        if os.path.exists(f_res_3d_rerun_1):
+            collect_results('3d_rerun', res, time, f_res_3d_rerun_1, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+        elif os.path.exists(f_res_3d_rerun_0):
+            collect_results('3d_rerun', res, time, f_res_3d_rerun_0, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+    if '3d' in models and os.path.exists(f_res_3d):
         collect_results('3d', res, time, f_res_3d)
-    collect_results('1d', res, time, f_res_1d, f_oned, t_in=time_inflow[-1])
+    if '1d' in models and os.path.exists(f_res_1d):
+        collect_results('1d', res, time, f_res_1d, f_oned, t_in=time_inflow[-1])
+    if '0d' in models and os.path.exists(f_res_0d):
+        collect_results('0d', res, time, f_res_0d, centerline=f_cent, t_in=time_inflow[-1])
 
     return res, time
 
 
-def collect_results_db_3d_3d(db, geo, bc=False):
+def collect_results_db_3d_3d(db, geo):
     # initialzie results dict
     res = defaultdict(lambda: defaultdict(dict))
     time = {}
@@ -782,10 +825,7 @@ def collect_results_db_3d_3d(db, geo, bc=False):
     # collect osmsc results
     collect_results('3d', res, time, f_res_3d_osmsc)
 
-    if bc:
-        f_res_3d_rerun = db.get_3d_flow_rerun_bc(geo)
-    else:
-        f_res_3d_rerun = db.get_3d_flow_rerun(geo)
+    f_res_3d_rerun = db.get_3d_flow_rerun(geo)
     if not os.path.exists(f_res_3d_rerun):
         return res, time
 
@@ -794,15 +834,8 @@ def collect_results_db_3d_3d(db, geo, bc=False):
         return res, time
 
     # collect rerun results
-    if bc:
-        f_cent = db.get_centerline_path(geo)
-        f_surf = db.get_surfaces(geo, 'all_exterior')
-        _, br_to_bcface = get_caps_db(db, geo, f_surf=f_surf)
-        collect_results('3d_rerun_bc', res, time, f_res_3d_rerun, centerline=f_cent, dt_3d=db.get_3d_timestep(geo),
-                        nt_3d=db.get_3d_increment(geo), t_in=time_inflow[-1], caps=br_to_bcface)
-    else:
-        collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo),
-                        nt_3d=db.get_3d_increment(geo), ns_3d=db.get_3d_numstep(geo), t_in=time_inflow[-1])
+    collect_results('3d_rerun', res, time, f_res_3d_rerun, dt_3d=db.get_3d_timestep(geo),
+                    nt_3d=db.get_3d_increment(geo), ns_3d=db.get_3d_numstep(geo), t_in=time_inflow[-1])
 
     return res, time
 
@@ -878,12 +911,12 @@ def main(db, geometries):
     for geo in geometries:
         print('Processing ' + geo)
 
-        read_hist(db, geo)
+        # read_hist(db, geo)
         if not os.path.exists(db.get_0d_flow_path(geo)):
             continue
 
         # export_1d_xmdf(db, geo)
-        # export_0d_vtp(db, geo)
+        export_0d_vtp(db, geo)
         # export_last(db, geo)
 
 
