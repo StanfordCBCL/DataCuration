@@ -229,8 +229,12 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
             path_cent = arrays_cent['Path'][arrays_cent['BranchId'] == br]
             path_cent /= path_cent[-1]
 
+            # get 0d path
+            path_0d = res['distance'][br]
+            path_0d /= path_0d[-1]
+
             # linearly interpolate results along centerline
-            f_cent = interp1d([0, 1], np.vstack((res[f][br][0], res[f][br][1])).T)(path_cent).T
+            f_cent = interp1d(path_0d, res[f][br].T)(path_cent).T
 
             # store in global array
             array_f[arrays_cent['BranchId'] == br] = f_cent
@@ -249,8 +253,8 @@ def map_0d_to_centerline(geo_cent, res, only_last=True):
             jc = arrays_cent['BifurcationId'][ip - 1]
 
             # centerline within junction
-            jc_cent = np.where(np.logical_and(arrays_cent['BifurcationId'] == jc, arrays_cent['CenterlineId'][:, cid]))[
-                0]
+            jc_cent = np.where(np.logical_and(arrays_cent['BifurcationId'] == jc,
+                                              arrays_cent['CenterlineId'][:, cid]))[0]
 
             # length of centerline within junction
             jc_path = np.append(0, np.cumsum(np.linalg.norm(np.diff(points[jc_cent], axis=0), axis=1)))
@@ -443,7 +447,7 @@ def load_results_3d(f_res_3d):
     try:
         out['flow'] = out['velocity']
     except:
-        pdb.set_trace()
+        raise RuntimeError('No results in file ' + f_res_3d)
     del out['velocity']
 
     return out
@@ -799,9 +803,9 @@ def collect_results_db(db, geo, models):
     # collect results
     if '3d_rerun' in models:
         if os.path.exists(f_res_3d_rerun_1):
-            collect_results('3d_rerun', res, time, f_res_3d_rerun_1, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+            collect_results('3d_rerun', res, time, f_res_3d_rerun_1, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo), ns_3d=db.get_3d_numstep(geo))
         elif os.path.exists(f_res_3d_rerun_0):
-            collect_results('3d_rerun', res, time, f_res_3d_rerun_0, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo))
+            collect_results('3d_rerun', res, time, f_res_3d_rerun_0, t_in=time_inflow[-1], dt_3d=db.get_3d_timestep(geo), ns_3d=db.get_3d_numstep(geo))
     if '3d' in models and os.path.exists(f_res_3d):
         collect_results('3d', res, time, f_res_3d)
     if '1d' in models and os.path.exists(f_res_1d):
