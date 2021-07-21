@@ -173,32 +173,37 @@ class Project:
         db = Database('1spb_length')
         res_num = get_dict(db.get_convergence_path())
 
-        cat = db.get_bcs(self.geo)['params']['deliverable_category']
+        params = db.get_bcs(self.geo)
+        cat = params['params']['deliverable_category']
 
         # pure resistance
-        bc_types = np.unique(list(db.get_bcs(self.geo)['bc_type'].values()))
+        bc_types = np.unique(list(params['bc_type'].values()))
         if len(bc_types) == 1 and bc_types[0] == 'resistance':
             return 2
 
+        # time constant
         if self.geo not in res_num:
-            return n_default
+            tau_list = []
+            for outlet, val in params['bc'].items():
+                if outlet in params['bc_type'] and params['bc_type'][outlet] == 'rcr':
+                    tau_list += [val['C'] * val['Rd']]
+            tau = np.max(tau_list)
         else:
-            # time constant
             tau = np.mean(res_num[self.geo]['tau']['pressure'])
 
-            # tolerance for asymptotic convergence
-            tol = 0.01
+        # tolerance for asymptotic convergence
+        tol = 0.01
 
-            # number of cardiac cycles required to reach tolerance (+ extra) from zero ICs
-            n_cycle_zero = int(- np.log(tol) * tau + 0.5) + n_extra
+        # number of cardiac cycles required to reach tolerance (+ extra) from zero ICs
+        n_cycle_zero = int(- np.log(tol) * tau + 0.5) + n_extra
 
-            # estimated number of cycles from steady state ICs
-            n_cycle_mean = int(4 + 2 * (tau + 0.5))
+        # estimated number of cycles from steady state ICs
+        n_cycle_mean = int(4 + 2 * (tau + 0.5))
 
-            if cat == 'Coronary':
-                return n_cycle_zero
-            else:
-                return np.min([n_cycle_zero, n_cycle_mean])
+        if cat == 'Coronary':
+            return n_cycle_zero
+        else:
+            return np.min([n_cycle_zero, n_cycle_mean])
     
     def write_svproj_file(self):
         t = str(self.db.svproj.t)
@@ -214,7 +219,7 @@ class Project:
             # write images/segmentations
             for k, s in self.db.svproj.dir.items():
                 f.write(t + '<' + k + ' folder_name="' + s + '"')
-                if k == 'images':
+                if k == 'images' and self.db.get_img(self.geo) is not None:
                     img = os.path.basename(self.db.get_img(self.geo))
                     f.write('>\n')
                     f.write(
@@ -439,7 +444,7 @@ class Project:
                 bc = bc_def['bc'][cap]
                 if cap == 'inflow' or cap == 'wall':
                     continue
-                if 'Po' in bc:
+                if 'Po' in bc and bc_def['bc_type'][cap] == 'resistance':
                     p0 = str(bc['Po'])
                 else:
                     p0 = '0.0'
@@ -823,7 +828,8 @@ class Project:
             os.makedirs(os.path.join(self.db.get_svproj_dir(self.geo), s), exist_ok=True)
     
         # copy image
-        self.copy_file(self.db.get_img(self.geo), 'images')
+        if self.db.get_img(self.geo) is not None:
+            self.copy_file(self.db.get_img(self.geo), 'images')
     
         # copy volume mesh
         self.copy_file(self.db.get_volume_mesh(self.geo), 'meshes')
@@ -840,8 +846,8 @@ class Project:
             raise RuntimeError('no volume mesh')
         if self.db.get_sv_surface(self.geo) is None:
             raise RuntimeError('no SV surface mesh')
-        if self.db.get_img(self.geo) is None:
-            raise RuntimeError('no medical image')
+        # if self.db.get_img(self.geo) is None:
+        #     raise RuntimeError('no medical image')
 
 
 def print_props(f, props, t):
