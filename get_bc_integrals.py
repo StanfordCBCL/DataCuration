@@ -93,7 +93,7 @@ def get_res_names(inp, res_fields):
         # check if field should be added to output
         if field in res_fields:
             try:
-                float(num)
+                #float(num)
                 res += [res_name]
             except ValueError:
                 pass
