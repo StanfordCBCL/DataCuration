@@ -98,7 +98,7 @@ def worker_process(i_list,fpath_1d,fpath_3d,res_names,points,normals,gid):
         #reader_1d.GetPointData().GetArray('area').SetValue(i, integral.area())
     return integration_data, area_data
 
-def extract_results(fpath_1d, fpath_3d, fpath_out, only_caps=False,workers=4,chunksize=100):
+def extract_results(fpath_1d, fpath_3d, fpath_out, only_caps=False,workers=1,chunksize=100):
     """
     Extract 3d results at 1d model nodes (integrate over cross-section)
     Args:
