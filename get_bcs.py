@@ -149,7 +149,8 @@ def get_bcs(tcl, tcl_bc):
             if sim_bc_type[cp] in ('rcr', 'resistance') and 'Po' not in bc:
                 sim_bc[cp]['Po'] = 0.0
             for p, v in bc.items():
-                sim_bc[cp][p] = get_in_model_units(params['sim_units'], p[0], v)
+                if p[0] in ('R', 'C'):
+                    sim_bc[cp][p] = get_in_model_units(params['sim_units'], p[0], v)
 
     # extract pressure over time in case of coronary boundary conditions
     coronary = {}
@@ -204,7 +205,18 @@ def get_params(tcl):
     params = {}
     for v in r.tk.eval('info globals').split():
         try:
-            params[v] = r.tk.getvar(v)
+            var = r.tk.getvar(v)
+
+            # don't add tcl stuff to dict
+            if isinstance(var, str) or isinstance(var, int) or isinstance(var, float):
+                params[v] = var
+            elif isinstance(var, tuple):
+                params[v] = list(var)
+            else:
+                try:
+                    params[v] = var.string
+                except:
+                    pass
         except:
             pass
 
