@@ -7,6 +7,7 @@ import pdb
 import re
 import shutil
 import sys
+import time
 
 import numpy as np
 
@@ -19,18 +20,28 @@ sys.path.append('/home/pfaller/work/repos/SimVascular_fork/Python/site-packages/
 sys.path.append('/home/pfaller/work/repos/svZeroDSolver_fork')
 
 import sv_rom_simulation as oned
-import run_0d_solver_fast as run0d
+import svzerodsolver as run0d
 
 
 def get_params(db, geo):
     # store parameters for export
     params = {}
 
+    if db.get_bcs(geo) is None:
+        raise RuntimeError('No boundary conditions')
+
+    n_inlet = db.count_inlets(geo)
+    if n_inlet == 0:
+        raise RuntimeError('3d geometry has no inlet')
+    elif n_inlet > 1:
+        raise RuntimeError('3d geometry has multiple inlets (' + repr(n_inlet) + ')')
+
     # simvascular project
     project = Project(db, geo, '')
 
     params['fpath_1d'] = db.get_solve_dir_1d(geo)
     fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
+    os.makedirs(fpath_geo, exist_ok=True)
 
     # reference pressure (= initial pressure?)
     if os.path.exists(db.get_bc_flow_path(geo)):
@@ -47,13 +58,6 @@ def get_params(db, geo):
         shutil.copy2(db.get_surfaces(geo, 'all_exterior'), fpath_geo)
     else:
         raise RuntimeError('3d geometry does not exist')
-
-    # check if geometry has no or multiple inlets
-    n_inlet = db.count_inlets(geo)
-    if n_inlet == 0:
-        raise RuntimeError('3d geometry has no inlet')
-    elif n_inlet > 1:
-        raise RuntimeError('3d geometry has multiple inlets (' + repr(n_inlet) + ')')
 
     # assume pre-computed centerlines from SimVascular C++
     params['centerlines_input_file'] = db.get_centerline_path(geo)
@@ -81,16 +85,26 @@ def get_params(db, geo):
     del caps['inflow']
     params['outlets'] = list(caps.keys())
 
+    # material parameters
+    params['olufsen_k1'] = 1e7
+    params['olufsen_k2'] = -20
+    params['olufsen_k3'] = 1e7
+    params['linear_ehr'] = 3e5
+    if not deformable:
+        params['mat_model'] = 'OLUFSEN'
+    else:
+        params['mat_model'] = 'LINEAR'
+
     # number of cycles to run
     params['n_cycle'] = project.estimate_n_cycle(n_default=50)
 
     # sub-segment size
-    params['seg_min_num'] = 10
+    params['seg_min_num'] = 1
     params['seg_size'] = 999
 
     # FEM size
-    params['min_num_elems'] = 10
-    params['element_size'] = 0.1
+    params['min_num_elems'] = 5
+    params['element_size'] = 0.01
 
     # mesh adaptive?
     params['seg_size_adaptive'] = True
@@ -106,8 +120,10 @@ def get_params(db, geo):
     params['num_dts'] = int(time[-1] * params['n_cycle'] / params['dt'] + 1.0)
 
     # model order (0 or 1)
-    params['model_order'] = 0
+    params['model_order'] = model_order
+    params['solver_output_file'] = geo + '_' + str(model_order) + 'd.in'
 
+    print('tau [cycles] = ' + str(params['n_cycle']))
     return params
 
 
@@ -125,8 +141,9 @@ def generate_1d_api(db, geo):
 
     # Mesh parameters
     mesh_params = params.MeshParameters()
-    mesh_params.seg_size_adaptive = params_db['seg_size_adaptive']
-    mesh_params.seg_min_num = params_db['seg_min_num']
+#    mesh_params.use_adaptive_meshing = params_db['seg_size_adaptive']
+#    mesh_params.num_branch_segments = params_db['seg_min_num']
+    mesh_params.element_size = params_db['element_size']
 
     # Model parameters
     model_params = params.ModelParameters()
@@ -139,7 +156,19 @@ def generate_1d_api(db, geo):
     fluid_props = params.FluidProperties()
 
     # Set wall properties
-    material = params.WallProperties.OlufsenMaterial()
+    if params_db['mat_model'] == 'OLUFSEN':
+        material = params.WallProperties.OlufsenMaterial()
+        material.k1 = params_db['olufsen_k1']
+        material.k2 = params_db['olufsen_k2']
+        material.k3 = params_db['olufsen_k3']
+        material.exponent = 2.0
+        material.pressure = params_db['pref']
+    elif params_db['mat_model'] == 'LINEAR':
+        material = params.WallProperties.LinearMaterial()
+        material.eh_r = params_db['linear_ehr']
+        material.pressure = params_db['pref']
+    else:
+        raise ValueError('Unknonwn material ' + params_db['mat_model'])
 
     # Set boundary conditions
     bcs = params.BoundaryConditions()
@@ -188,6 +217,7 @@ def generate_1d(db, geo):
     # set simulation paths
     fpath_geo = os.path.join(params['fpath_1d'], 'geometry')
     fpath_surf = os.path.join(fpath_geo, 'surfaces')
+    os.makedirs(fpath_surf, exist_ok=True)
 
     # copy outlet surfaces
     for f in db.get_surfaces(geo, 'caps'):
@@ -212,16 +242,16 @@ def generate_1d(db, geo):
                  element_size=params['element_size'],
                  inlet_face_input_file='inflow.vtp',
                  inflow_input_file=db.get_sv_flow_path(geo, '1d'),
-                 linear_material_ehr=1e15,
+                 linear_material_ehr=params['linear_ehr'],
                  linear_material_pressure=params['pref'],
-                 material_model=None,
+                 material_model=params['mat_model'],
                  mesh_output_file=geo + '.vtp',
                  min_num_elements=params['min_num_elems'],
                  model_name=geo,
                  num_time_steps=params['num_dts'],
-                 olufsen_material_k1=None,
-                 olufsen_material_k2=None,
-                 olufsen_material_k3=None,
+                 olufsen_material_k1=params['olufsen_k1'],
+                 olufsen_material_k2=params['olufsen_k2'],
+                 olufsen_material_k3=params['olufsen_k3'],
                  olufsen_material_exp=2.0,
                  olufsen_material_pressure=params['pref'],
                  outflow_bc_input_file=params['fpath_1d'],
@@ -231,7 +261,7 @@ def generate_1d(db, geo):
                  seg_min_num=params['seg_min_num'],
                  seg_size=params['seg_size'],
                  seg_size_adaptive=params['seg_size_adaptive'],
-                 solver_output_file='solver.in',
+                 solver_output_file=params['solver_output_file'],
                  save_data_frequency=params['save_data_freq'],
                  surface_model=os.path.join(fpath_geo, 'all_exterior.vtp'),
                  time_step=params['dt'],
@@ -247,6 +277,8 @@ def generate_1d(db, geo):
 
     return None
 
+model_order = 0
+deformable = False
 
 # from profilehooks import profile
 # @profile
@@ -257,22 +289,25 @@ def main(db, geometries):
     for geo in geometries:
         print('Running geometry ' + geo)
 
-        # if os.path.exists(db.get_1d_flow_path(geo)):
-        #     print('  skipping')
+        # if (model_order == 0 and os.path.exists(db.get_0d_flow_path(geo))) or (model_order == 1 and os.path.exists(db.get_1d_flow_path(geo))):
+        #     print('Results exist. Skipping...')
         #     continue
 
-        # generate oneDSolver input file and check if successful
+        # msg = generate_1d_api(db, geo)
+        # sys.exit(0)
+        # get parameters
         try:
+            params = get_params(db, geo)
             msg = generate_1d_api(db, geo)
-        except:
-            msg = 'error'
+        except Exception as e:
+            msg = 'error: ' + str(e)
 
-        # msg = None
-        # if False:
+        # continue
+        start = time.time()
         if not msg:
             if model_order == 1:
                 # run oneDSolver
-                sv.run_solver_1d(db.get_solve_dir_1d(geo), 'solver.in')
+                sv.run_solver_1d(db.get_solve_dir_1d(geo), params['solver_output_file'])
 
                 # extract results
                 res_dir = db.get_solve_dir_1d(geo)
@@ -292,25 +327,38 @@ def main(db, geometries):
                 else:
                     msg = 'unconverged'
             elif model_order == 0:
-                # get parameters
-                params = get_params(db, geo)
-
                 # parameters for 0d simulation
-                zero_d_solver_input_file_path = os.path.join(db.get_solve_dir_1d(geo), 'solver.in')
+                zero_d_solver_input_file_path = os.path.join(db.get_solve_dir_1d(geo), params['solver_output_file'])
 
                 # run 0d simulation
-                run0d.set_up_and_run_0d_simulation(zero_d_solver_input_file_path)
+                try:
+                # if True:
+                    ini_steady = True
+                    if 'coronary' in db.get_bcs(geo)['bc_type'].values():
+                        ini_steady = False
+                    run0d.solver.set_up_and_run_0d_simulation(zero_d_solver_input_file_path,
+                                                              use_steady_soltns_as_ics=ini_steady)
 
-                # move output file
-                src = os.path.join(db.get_solve_dir_1d(geo), 'solver_all_results.npy')
-                dst = db.get_0d_flow_path(geo)
-                shutil.move(src, dst)
-        else:
+                    # move output file
+                    src = os.path.join(db.get_solve_dir_1d(geo), geo + '_0d_branch_results.npy')
+                    dst = db.get_0d_flow_path(geo)
+                    shutil.move(src, dst)
+
+                    msg = 'success'
+                except Exception as e:
+                    msg = '0d failed: ' + str(e)
+        if msg != 'success':
             print('  skipping (1d model creation failed)\n  ' + msg)
+        end = time.time()
+        print('\nTime elapsed: ' + '{:.2f}'.format(end - start) + '\n')
 
         # store errors in file
         if model_order == 1:
             db.add_log_file_1d(geo, msg)
+            db.add_log_file_1d(geo + '_time', end - start)
+        elif model_order == 0:
+            db.add_log_file_0d(geo, msg)
+            db.add_log_file_0d(geo + '_time', end - start)
 
 
 if __name__ == '__main__':
