@@ -129,18 +129,22 @@ class Database:
         return sorted(get_dict(self.db_params).keys())
 
     def get_geometries_select(self, name):
-        if name == 'paper':
-            # pick all geometries in rest state
-            geometries = []
-            for geo in self.get_geometries():
-                bcs = self.get_bcs(geo)
-                if bcs is None:
-                    continue
-                if bcs['params']['sim_physio_state'] == 'rest':
-                    geometries += [geo]
+        # only geometries where a 0d AND a 3d_rerun solution exisis
+        if name == 'paper':    
+            geometries = []   
+            res_0d = get_dict(self.get_log_file_0d())
+            res_1d = get_dict(self.get_log_file_1d())
+            for geo in sorted(list(res_0d.keys())):
+                fpath1 = '/home/pfaller/work/osmsc/studies/ini_1d_quad/3d_flow/' + geo + '.vtp'
+                fpath2 = '/home/pfaller/work/osmsc/studies/ini_zero/3d_flow/' + geo + '.vtp'
+                # check if 3d results exist
+                if os.path.exists(fpath1) or os.path.exists(fpath2):
+                    # check if 0d AND 1d results exist
+                    if res_0d[geo] == 'success' and res_1d[geo] == 'success':
+                        geometries += [geo]
+        elif name == 'published':
+            geometries = np.loadtxt('geometries_paper.txt', dtype='str')
 
-            # exclude geometries
-            geometries = self.exclude_geometries(geometries)
         elif name == 'coarctation':
             geometries = ['0066_0001', '0067_0001', '0068_0001', '0069_0001', '0070_0001', '0071_0001', '0072_0001',
                           '0073_0001', '0074_0001', '0106_0001', '0107_0001', '0111_0001', '0090_0001', '0091_0001',
@@ -204,6 +208,8 @@ class Database:
                           '0064_1001', '0006_0001']
         elif name == 'fixed_dt':
             geometries = ['0068_0001', '0092_0001', '0099_0001']
+        elif name == 'rerun_coronary':
+            geometries = ['0173_1001', '0183_1002', '0186_0002', '0187_0002', '0189_0001']
         elif name == 'resistance':
             geometries = []
             for geo in self.get_geometries():
@@ -261,15 +267,22 @@ class Database:
         return geo in loop
 
     def get_png(self, geo):
+        pretty = os.path.join(self.fpath_png, '../png_pretty', geo + '.png')
         sim = os.path.join(self.fpath_png, 'OSMSC' + geo + '_sim.png')
         vol = os.path.join(self.fpath_png, 'OSMSC' + geo + '_vol.png')
-        if os.path.exists(sim):
-            return sim
+        if os.path.exists(pretty):
+            return pretty
         else:
-            return vol
+            if os.path.exists(sim):
+                return sim
+            else:
+                return vol
 
     def get_img(self, geo):
         return exists(os.path.join(self.fpath_sim, geo, 'image_data', 'vti', 'OSMSC' + geo[:4] + '-cm.vti'))
+
+    def get_json(self, geo):
+        return os.path.join(self.fpath_gen, 'json', geo + '.json')
 
     def get_surface_dir(self, geo):
         return os.path.join(self.fpath_gen, 'surfaces', geo)
@@ -376,8 +389,11 @@ class Database:
     def get_0d_flow_path(self, geo):
         return self.gen_file('0d_flow', geo)
 
-    def get_0d_flow_path_vtp(self, geo):
-        return self.gen_file('0d_flow', geo, 'vtp')
+    def get_0d_flow_path_vtp(self, geo, only_last=True):
+        if only_last:
+            return self.gen_file('0d_flow', geo + '_last', 'vtp')
+        else:
+            return self.gen_file('0d_flow', geo, 'vtp')
 
     def get_1d_flow_path(self, geo):
         return self.gen_file('1d_flow', geo)
@@ -385,8 +401,11 @@ class Database:
     def get_1d_flow_path_xdmf(self, geo):
         return self.gen_file('1d_flow', geo, 'xdmf')
 
-    def get_1d_flow_path_vtp(self, geo):
-        return self.gen_file('1d_flow', geo, 'vtp')
+    def get_1d_flow_path_vtp(self, geo, only_last=True):
+        if only_last:
+            return self.gen_file('1d_flow', geo + '_last', 'vtp')
+        else:
+            return self.gen_file('1d_flow', geo, 'vtp')
 
     def get_post_path(self, geo, name):
         return self.gen_file('1d_3d_comparison', geo + '_' + name, 'png')
@@ -472,6 +491,12 @@ class Database:
 
     def get_1d_3d_comparison(self):
         return os.path.join(os.path.dirname(self.get_post_path('', '')), '1d_3d_comparison.npy')
+
+    def get_0d_1d_comparison(self):
+        return os.path.join(os.path.dirname(self.get_post_path('', '')), '0d_1d_comparison.npy')
+
+    def add_0d_1d_comparison(self, geo, err):
+        self.add_dict(self.get_0d_1d_comparison(), geo, err)
 
     def add_1d_3d_comparison(self, geo, err):
         self.add_dict(self.get_1d_3d_comparison(), geo, err)
@@ -750,6 +775,7 @@ class SimVascular:
         self.svpre = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpre'
         self.svsolver = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svsolver'
         self.svpost = '/home/pfaller/work/repos/svSolver/build/svSolver-build/bin/svpost'
+        self.zerodsolver = '/home/pfaller/work/repos/svZeroDSolver_cpp/build/svzerodsolver'
         self.onedsolver = '/home/pfaller/work/repos/svOneDSolver_fork/build_skyline/bin/OneDSolver'
         self.sv = '/home/pfaller/work/repos/SimVascular_fork/build/SimVascular-build/sv'
         self.sv_legacy_io = '/home/pfaller/work/repos/SimVascularLegacyIO/build/SimVascular-build/sv'
@@ -766,6 +792,10 @@ class SimVascular:
     def run_post(self, run_folder, args):
         subprocess.run([self.svpost] + args, cwd=run_folder, stdout=open(os.devnull, "w"))
         # run_command(run_folder, [self.svpost, args])
+
+    def run_solver_0d(self, run_file, out_file='tmp.csv'):
+        msg = run_command('.', [self.zerodsolver, run_file, out_file])
+        return msg != 0
 
     def run_solver_1d(self, run_folder, run_file='solver.inp'):
         run_command(run_folder, [self.onedsolver, run_file])  # 'mpirun', '-np', '4',
@@ -811,15 +841,16 @@ class SVProject:
 
 class Post:
     def __init__(self):
-        self.fields = ['pressure', 'flow', 'area']
-        # self.fields = ['pressure', 'flow']
-        self.units = {'pressure': 'mmHg', 'flow': 'l/h', 'area': 'mm^2'}
-        self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-', '0d': '-'}
+        # self.fields = ['pressure', 'flow', 'area']
+        self.fields = ['pressure', 'flow']
+        self.units = {'pressure': 'mmHg', 'flow': 'l/min', 'area': 'mm$^2$'}
+        self.styles = {'3d': '-', '3d_rerun': '-', '3d_rerun_bc': '-', '1d': '-.', '0d': '--'}
         self.color = {'3d': 'k', '3d_rerun': 'tab:blue', '3d_rerun_bc': 'C1', '1d': 'tab:orange', '0d': 'r'}
+        # self.color = {'3d': 'k', '3d_rerun': 'C0', '3d_rerun_bc': 'C1', '1d': 'C1', '0d': 'C2'}
 
         self.cgs2mmhg = 7.50062e-4
-        self.mlps2lph = 60 / 1000
-        self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lph, 'area': 100}
+        self.mlps2lpmin = 60 / 1000
+        self.convert = {'pressure': self.cgs2mmhg, 'flow': self.mlps2lpmin, 'area': 100}
 
         # sets the plot order
         # self.models = ['3d', '1d', '0d']
@@ -829,6 +860,8 @@ class Post:
         self.models = ['3d_rerun', '3d', '1d', '0d']
         # self.models = ['3d', '3d_rerun']
         # self.models = ['3d', '3d_rerun_bc']
+        # self.model_names = {'3d': '3d_legacy', '3d_rerun': 'svSolver', '1d': 'svOneDSolver', '0d': 'svZeroDSolver'}
+        self.model_names = {'3d': '3d legacy', '3d_rerun': '3D', '1d': '1D', '0d': '0D'}
 
         self.colors = {'Cerebrovascular': 'k',
                        'Coronary': 'r',
