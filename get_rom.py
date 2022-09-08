@@ -8,10 +8,12 @@ import re
 import shutil
 import sys
 import time
+import json
 
 import numpy as np
+from pandas import read_csv
 
-from get_database import Database, SimVascular, Post, input_args
+from get_database import Database, SimVascular, Post, input_args, run_command
 from get_sv_project import Project
 from simulation_io import read_results_1d, get_caps_db
 from common import coronary_sv_to_oned
@@ -103,7 +105,7 @@ def get_params(db, geo):
     params['seg_size'] = 999
 
     # FEM size
-    params['min_num_elems'] = 5
+    params['min_num_elems'] = 10
     params['element_size'] = 0.01
 
     # mesh adaptive?
@@ -278,6 +280,8 @@ def generate_1d(db, geo):
     return None
 
 model_order = 0
+zerod_cpp = True
+zerod_cpp_fast = True
 deformable = False
 
 # from profilehooks import profile
@@ -293,21 +297,23 @@ def main(db, geometries):
         #     print('Results exist. Skipping...')
         #     continue
 
+        msg = None
         # msg = generate_1d_api(db, geo)
         # sys.exit(0)
         # get parameters
         try:
             params = get_params(db, geo)
-            msg = generate_1d_api(db, geo)
+            # msg = generate_1d(db, geo)
         except Exception as e:
             msg = 'error: ' + str(e)
 
         # continue
-        start = time.time()
         if not msg:
             if model_order == 1:
                 # run oneDSolver
+                start = time.time()
                 sv.run_solver_1d(db.get_solve_dir_1d(geo), params['solver_output_file'])
+                end = time.time()
 
                 # extract results
                 res_dir = db.get_solve_dir_1d(geo)
@@ -328,28 +334,95 @@ def main(db, geometries):
                     msg = 'unconverged'
             elif model_order == 0:
                 # parameters for 0d simulation
-                zero_d_solver_input_file_path = os.path.join(db.get_solve_dir_1d(geo), params['solver_output_file'])
+                zerod_in = os.path.join(db.get_solve_dir_1d(geo), params['solver_output_file'])
 
                 # run 0d simulation
-                try:
-                # if True:
-                    ini_steady = True
-                    if 'coronary' in db.get_bcs(geo)['bc_type'].values():
-                        ini_steady = False
-                    run0d.solver.set_up_and_run_0d_simulation(zero_d_solver_input_file_path,
-                                                              use_steady_soltns_as_ics=ini_steady)
+                # try:
+                if True:
+                    if zerod_cpp:
+                        # quick output?
+                        with open(zerod_in, 'r') as file:
+                            inp = json.load(file)
+                            if zerod_cpp_fast:
+                                label = True
+                            else:
+                                label = False
+                            inp['simulation_parameters']['output_variable_based'] = label
+                            inp['simulation_parameters']['output_last_cycle_only'] = label
+                        with open(zerod_in, 'w') as file:
+                            json.dump(inp, file, indent=4, sort_keys=True)
 
-                    # move output file
-                    src = os.path.join(db.get_solve_dir_1d(geo), geo + '_0d_branch_results.npy')
-                    dst = db.get_0d_flow_path(geo)
-                    shutil.move(src, dst)
+                        # run cpp
+                        zerod_out = db.get_0d_flow_path(geo).replace('npy', 'csv')
 
-                    msg = 'success'
-                except Exception as e:
-                    msg = '0d failed: ' + str(e)
+                        start = time.time()
+                        err = sv.run_solver_0d(zerod_in, zerod_out)
+                        end = time.time()
+
+                        if err:
+                            msg = 'cpp error'
+                        else:
+                            msg = 'success'
+
+                            if not zerod_cpp_fast:
+                                # convert to numpy
+                                df = read_csv(zerod_out)
+                                out = {"flow": {}, "pressure": {}, "distance": {}}
+
+                                # read input file
+                                with open(zerod_in, 'r') as file:
+                                    inp = json.load(file)
+
+                                # loop branches and segments
+                                names = list(sorted(set(df["name"])))
+                                for name in names:
+                                    # extract ids
+                                    br, seg = [int(s) for s in re.findall(r'\d+', name)]
+
+                                    # add 0d results
+                                    for field in ['flow', 'pressure']:
+                                        if seg == 0:
+                                            out[field][br] = [list(df[df.name == name][field + '_in'])]
+                                        out[field][br] += [list(df[df.name == name][field + '_out'])]
+                                    out["time"] = list(df[df.name == name]["time"])
+
+                                    # add path distance
+                                    for vessel in inp['vessels']:
+                                        if vessel['vessel_name'] == name:
+                                            if seg == 0:
+                                                out["distance"][br] = [0]
+                                            l_new = out["distance"][br][-1] + vessel['vessel_length']
+                                            out["distance"][br] += [l_new]
+
+                                # convert to numpy
+                                for field in ['flow', 'pressure', 'distance']:
+                                    for br in out[field].keys():
+                                        out[field][br] = np.array(out[field][br])
+                                out['time'] = np.array(out['time'])
+
+                                # save to file
+                                np.save(db.get_0d_flow_path(geo), out)
+
+                    else:
+                        ini_steady = True
+                        if 'coronary' in db.get_bcs(geo)['bc_type'].values():
+                            ini_steady = False
+
+                        start = time.time()
+                        run0d.solver.set_up_and_run_0d_simulation(zerod_in,
+                                                                  use_steady_soltns_as_ics=ini_steady)
+                        end = time.time()
+
+                        # move output file
+                        src = os.path.join(db.get_solve_dir_1d(geo), geo + '_0d_branch_results.npy')
+                        dst = db.get_0d_flow_path(geo)
+                        shutil.move(src, dst)
+
+                        msg = 'success'
+                # except Exception as e:
+                #     msg = '0d failed: ' + str(e)
         if msg != 'success':
             print('  skipping (1d model creation failed)\n  ' + msg)
-        end = time.time()
         print('\nTime elapsed: ' + '{:.2f}'.format(end - start) + '\n')
 
         # store errors in file
