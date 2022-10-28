@@ -16,7 +16,7 @@ from vtk.util.numpy_support import numpy_to_vtk as n2v
 from lift_laplace import StiffnessMatrix
 from get_database import Database, SimVascular, Post, input_args
 from vtk_functions import read_geo, write_geo, ClosestPoints, cell_connectivity, region_grow, collect_arrays
-from simulation_io import map_1d_to_centerline, collect_results, get_caps_db
+from simulation_io import collect_results, get_caps_db
 from compare_1d import plot_1d_3d_interior as plt1d3d
 
 
@@ -377,17 +377,18 @@ def main(db, geometries):
         f_1d = db.get_1d_flow_path_vtp(geo)
         f_wall = db.get_surfaces(geo, 'wall')
         f_out = db.get_initial_conditions_pressure(geo) #'test.vtu'#
+        pdb.set_trace()
 
         if os.path.exists(f_out):
             print('  projection exists, skipping')
             continue
 
-        if os.path.exists(f_1d):
-            print('  using 1d')
-            f_red = f_1d
-        elif os.path.exists(f_0d):
+        if os.path.exists(f_0d):
             print('  using 0d')
             f_red = f_0d
+        elif os.path.exists(f_1d):
+            print('  using 1d')
+            f_red = f_1d
         else:
             print('  no 0d/1d solution found')
             continue
@@ -396,6 +397,22 @@ def main(db, geometries):
         #     print('  map exists')
         #     continue
 
+        project_1d_3d_grow(f_red, f_vol, f_wall, f_out)
+
+
+def main_paper():
+    db = Database('deformable')
+    geo = '0069_0001'
+    f_vol = os.path.join(db.get_sv_meshes(geo), geo + '.vtu')
+    f_red = db.get_0d_flow_path_vtp(geo)
+    f_wall = db.get_surfaces(geo, 'wall')
+
+    for m in ['0d', '1d']:
+        if m == '0d':
+            f_red = db.get_0d_flow_path_vtp(geo)
+        elif m == '1d':
+            f_red = db.get_1d_flow_path_vtp(geo)
+        f_out = f_red.replace('.vtp', '.vtu')
         project_1d_3d_grow(f_red, f_vol, f_wall, f_out)
 
 
@@ -421,8 +438,9 @@ def convert_time(db, geometries):
 
 if __name__ == '__main__':
     descr = 'Get 3D-3D statistics'
-    d, g, _ = input_args(descr)
-    main(d, g)
+    # d, g, _ = input_args(descr)
+    # main(d, g)
+    main_paper()
     # convert_time(d, g)
     # plot_projection(d, g)
     # f_vol = '/home/pfaller/downloads/0069_0001_post-interv (1)/0069_0001_post-interv/Meshes/0069_0001.vtu'

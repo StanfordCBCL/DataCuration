@@ -359,8 +359,11 @@ def get_time(model, res, time, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0):
         eps = 1.0e-3
 
         # select last cycle and shift time to start from zero
-        time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first - eps, time[model + '_all'] <= t_last + eps)
-        time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_first
+        try:
+            time[model + '_last_cycle_i'] = np.logical_and(time[model + '_all'] >= t_first - eps, time[model + '_all'] <= t_last + eps)
+            time[model] = time[model + '_all'][time[model + '_last_cycle_i']] - t_first
+        except:
+            pdb.set_trace()
         cycle_range = []
         for i in np.arange(1, n_cycle + 1):
             t_first = t_end * (i - 1)
@@ -370,7 +373,7 @@ def get_time(model, res, time, dt_3d=0, nt_3d=0, ns_3d=0, t_in=0):
             time[model + '_i_cycle_' + str(i)] = np.logical_and(bound0, bound1)
             time[model + '_cycle_' + str(i)] = time[model + '_all'][time[model + '_i_cycle_' + str(i)]] - t_first
             cycle_range += [np.where(time[model + '_i_cycle_' + str(i)])[0]]
-        time[model + '_cycles'] = np.array(cycle_range)
+        time[model + '_cycles'] = np.array(cycle_range, dtype=object)
     # elif '3d_rerun' in model:
     #     time_steps = res['time'].astype(int)
     #     pdb.set_trace()
@@ -801,6 +804,7 @@ def export_rom_vtp_db(db, geo, model, only_last=True):
         return
 
     arrays = map_rom_to_centerline(model, cent, res, time, only_last=only_last)
+    pdb.set_trace()
     write_results(f_out, cent, arrays, only_last=only_last)
 
 
@@ -813,7 +817,16 @@ def main(db, geometries):
             continue
 
         for m in ['0d', '1d']:
-            export_rom_vtp_db(db, geo, m, only_last=False)
+            export_rom_vtp_db(db, geo, m, only_last=True)
+        # export_last(db, geo)
+
+
+def main_cover(db, geometries):
+    for geo in geometries:
+        print('Processing ' + geo)
+
+        for m in ['0d', '1d']:
+            export_rom_vtp_db(db, geo, m, only_last=True)
         # export_last(db, geo)
 
 

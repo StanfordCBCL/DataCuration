@@ -231,12 +231,12 @@ def cut_plane(inp, origin, normal):
 
 def get_points_cells(inp):
     cells = []
-    for i in range(inp.GetOutput().GetNumberOfCells()):
+    for i in range(inp.GetNumberOfCells()):
         cell_points = []
-        for j in range(inp.GetOutput().GetCell(i).GetNumberOfPoints()):
-            cell_points += [inp.GetOutput().GetCell(i).GetPointId(j)]
+        for j in range(inp.GetCell(i).GetNumberOfPoints()):
+            cell_points += [inp.GetCell(i).GetPointId(j)]
         cells += [cell_points]
-    return v2n(inp.GetOutput().GetPoints().GetData()), np.array(cells)
+    return v2n(inp.GetPoints().GetData()), np.array(cells)
 
 
 def connectivity(inp, origin):
@@ -343,8 +343,9 @@ def geo(inp):
 
 def region_grow(geo, seed_points, seed_ids, n_max=99):
     # initialize output arrays
-    array_dist = -1 * np.ones(geo.GetNumberOfPoints(), dtype=int)
     array_ids = -1 * np.ones(geo.GetNumberOfPoints(), dtype=int)
+    array_rad = np.zeros(geo.GetNumberOfPoints())
+    array_dist = -1 * np.ones(geo.GetNumberOfPoints(), dtype=int)
     array_ids[seed_points] = seed_ids
 
     # initialize ids
@@ -352,15 +353,12 @@ def region_grow(geo, seed_points, seed_ids, n_max=99):
     pids_all = set(seed_points.tolist())
     pids_new = set(seed_points.tolist())
 
-    surf = extract_surface(geo)
-    pids_surf = set(v2n(surf.GetPointData().GetArray('GlobalNodeID')).tolist())
+    # get points
+    pts = v2n(geo.GetPoints().GetData())
 
     # loop until region stops growing or reaches maximum number of iterations
     i = 0
     while len(pids_new) > 0 and i < n_max:
-        # count grow iterations
-        i += 1
-
         # update
         pids_old = pids_new
 
@@ -392,10 +390,15 @@ def region_grow(geo, seed_points, seed_ids, n_max=99):
 
         # find closest point in new wave front
         for i_new in pids_new:
-            array_ids[i_new] = array_ids[pids_old_arr[locator.FindClosestPoint(geo.GetPoint(i_new))]]
+            i_old = pids_old_arr[locator.FindClosestPoint(geo.GetPoint(i_new))]
+            array_ids[i_new] = array_ids[i_old]
+            array_rad[i_new] = array_rad[i_old] + np.linalg.norm(pts[i_new] - pts[i_old])
             array_dist[i_new] = i
 
-    return array_ids, array_dist + 1
+        # count grow iterations
+        i += 1
+
+    return array_ids, array_dist + 1, array_rad
 
 
 def grow(geo, array, pids_in, pids_all, cids_all):
