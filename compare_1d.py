@@ -400,6 +400,12 @@ def calc_error(db, geo, res, time, m_rom, m_ref):
     # get spatial errors
     err = rec_dict()
     for f in fields:
+        # calculate maximum delta over whole model over all time steps
+        res_all = res[0][f][m_ref + '_int_last']
+        for br in branches['int'][f][1:]:
+            res_all = np.vstack((res_all, res[br][f][m_ref + '_int_last']))
+        norm_delta = np.max((np.max(res_all, axis=0) - np.min(res_all, axis=0)))
+
         for br in branches['int'][f]:
             # retrieve 3d results
             res_3d = res[br][f][m_ref + '_int_last']
@@ -422,9 +428,15 @@ def calc_error(db, geo, res, time, m_rom, m_ref):
             diff = np.abs(res_1d - res_3d).T
 
             # loop through different error metrics
-            for n in ['abs', 'rel']:
+            for n in ['abs', 'rel', 'rel_delta']:
                 if n == 'rel':
                     delta = diff / norm
+                elif n == 'rel_delta':
+                    # if f == 'pressure':
+                    delta = diff / norm_delta
+                    #     pdb.set_trace()
+                    # else:
+                    #     delta = diff / norm
                 else:
                     delta = diff
                 for tn, ti in times.items():
@@ -465,7 +477,7 @@ def main(db, geometries):
         print(geo)
 
         # read results
-        deform = db.study == 'deformable'
+        deform = 'deformable' in db.study
         res, time = collect_results_db(db, geo, post.models, deformable=deform)
 
         # plot options
@@ -479,15 +491,16 @@ def main(db, geometries):
                'exclude_old': True}
 
         # calculate error
-        if ('0d' in time and '1d' in time) and '3d_rerun' in time:
-            print('  claculating error')
+        if ('0d' in time) and '3d_rerun' in time:
+            print('  calculating error')
             calc_error_all(db, geo, res, time)
-    
-        if '3d_rerun' in time and '1d' in time:# or '3d' in time:
-            print('  plotting')
-            plot_1d_3d_all(db, opt, geo, res, time)
-            plot_1d_3d_caps(db, opt, geo, res, time)
-            plot_1d_3d_interior(db, opt, geo, res, time)
+
+        if True:
+            if '3d_rerun' in time:# and '1d' in time:# or '3d' in time:
+                print('  plotting')
+                plot_1d_3d_all(db, opt, geo, res, time)
+                plot_1d_3d_caps(db, opt, geo, res, time)
+                plot_1d_3d_interior(db, opt, geo, res, time)
 
         # plot_1d_3d_paper(db, opt, geo, res, time)
         # plot_1d_3d_cyclic(db, opt, geo, res, time)
